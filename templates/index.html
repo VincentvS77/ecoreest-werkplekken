@@ -20,8 +20,9 @@ body { font-family: 'DM Sans', sans-serif; background: var(--eco-bg); color: var
 .header h1 { font-family: 'Space Mono', monospace; font-size: 18px; color: var(--eco-green-dark); letter-spacing: -0.5px; line-height: 1.2; }
 .header p { font-size: 12px; color: var(--eco-muted); margin-top: 1px; }
 .name-section { display: flex; gap: 8px; margin-bottom: 14px; }
-.name-section input { flex: 1; padding: 10px 14px; border: 2px solid var(--eco-border); border-radius: 10px; font-size: 14px; font-family: 'DM Sans', sans-serif; background: white; outline: none; }
-.name-section input:focus { border-color: var(--eco-green); }
+.name-section input, .name-section select { flex: 1; padding: 10px 14px; border: 2px solid var(--eco-border); border-radius: 10px; font-size: 14px; font-family: 'DM Sans', sans-serif; background: white; outline: none; }
+.name-section input:focus, .name-section select:focus { border-color: var(--eco-green); }
+.name-section select { cursor: pointer; }
 .btn { padding: 10px 16px; background: var(--eco-green); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: 'DM Sans', sans-serif; }
 .btn:hover { background: var(--eco-green-dark); }
 .btn:active { transform: scale(0.97); }
@@ -148,6 +149,17 @@ body { font-family: 'DM Sans', sans-serif; background: var(--eco-bg); color: var
   .att-chip { padding: 6px 10px; font-size: 12px; }
   .admin-grid { grid-template-columns: 70px repeat(5, 1fr); font-size: 10px; }
 }
+.filter-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.filter-select { flex: 1; padding: 8px 12px; border: 1.5px solid var(--eco-border); border-radius: 8px; font-size: 13px; font-family: 'DM Sans', sans-serif; outline: none; background: white; min-width: 0; }
+.filter-select:focus { border-color: var(--eco-green); }
+.view-toggle { display: flex; gap: 2px; flex-shrink: 0; }
+.view-btn { padding: 8px 12px; border: 1.5px solid var(--eco-border); border-radius: 8px; background: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; }
+.view-btn.active { border-color: var(--eco-green); background: var(--eco-green-light); color: var(--eco-green-dark); }
+.month-cell { vertical-align: top; cursor: pointer; border-radius: 6px; }
+.month-cell:hover { background: var(--eco-green-light); }
+.month-cell.selected { background: var(--eco-green-light); outline: 2px solid var(--eco-green); }
+.month-date { font-size: 11px; font-weight: 700; color: var(--eco-muted); margin-bottom: 2px; }
+.month-date.today { color: white; background: var(--eco-accent); border-radius: 10px; padding: 0 4px; display: inline-block; }
 </style>
 </head>
 <body>
@@ -158,12 +170,40 @@ body { font-family: 'DM Sans', sans-serif; background: var(--eco-bg); color: var
 // Eco Reest — Aanwezigheid & Werkplekken
 // ═══════════════════════════════════════
 
+// ── Top-level constants ──
 const ADMIN_PW = "ecoreest2026";
-const SK_ADM = "ecoreest-admin-v1";
-const SK_ATT = "ecoreest-attendance-v1";
-const SK_DESK = "ecoreest-deskres-v3";
 const DAY_KEYS = ["zo","ma","di","wo","do","vr","za"];
 const DAYS = ["ma","di","wo","do","vr"];
+
+const STATUS_SHORTS = {
+  hoogeveen: "HGV",
+  groningen: "GRN",
+  almere:    "ALM",
+  lochem:    "LOC",
+  breda:     "BRE",
+  goes:      "GOES",
+  thuis:     "Thuis",
+  veld:      "Veld/ext",
+  vrij:      "Vrij",
+  ziek:      "Ziek",
+};
+
+const MONTHS_NL = [
+  "januari","februari","maart","april","mei","juni",
+  "juli","augustus","september","oktober","november","december"
+];
+const MONTHS_SHORT = [
+  "jan","feb","mrt","apr","mei","jun",
+  "jul","aug","sep","okt","nov","dec"
+];
+const DAYS_NL = ["zo","ma","di","wo","do","vr","za"];
+
+// FLOORS references svgHGV, svgHGV_BG, svgGRN — those are function declarations and are hoisted.
+const FLOORS = [
+  { id: "hgv1", label: "Hoogeveen", sub: "1e verdieping", loc: "hgv",    svgFn: svgHGV    },
+  { id: "hgv0", label: "Hoogeveen", sub: "Begane grond",  loc: "hgv_bg", svgFn: svgHGV_BG },
+  { id: "grn",  label: "Groningen", sub: "",              loc: "grn",    svgFn: svgGRN    },
+];
 
 // ── Default config (overridable via admin) ──
 const DEF_EMPLOYEES = [
@@ -230,162 +270,388 @@ const DEF_HGV_BG = {
   20:{ma:null,di:null,wo:null,do:null,vr:null},
 };
 
-// ── Config: server-side opslag ──
-function loadConfig() {
-  return S.adminCfg || null;
+// ── Config ──
+function getCfg() {
+  const c = S.adminCfg || null;
+  return {
+    employees: c?.employees || DEF_EMPLOYEES,
+    statuses:  c?.statuses  || DEF_STATUSES,
+    hgv:       c?.hgv       || DEF_HGV,
+    hgv_bg:    c?.hgv_bg    || DEF_HGV_BG,
+    grn:       c?.grn       || DEF_GRN,
+  };
 }
 function saveConfig(cfg) {
   S.adminCfg = cfg;
-  fetch('/api/data', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({adminCfg: cfg})
-  }).catch(e => console.error('Config opslaan mislukt:', e));
-}
-function getCfg() {
-  const c = loadConfig();
-  return {
-    employees: c?.employees || DEF_EMPLOYEES,
-    statuses: c?.statuses || DEF_STATUSES,
-    hgv: c?.hgv || DEF_HGV,
-    hgv_bg: c?.hgv_bg || DEF_HGV_BG,
-    grn: c?.grn || DEF_GRN,
-  };
+  postData({ adminCfg: cfg })
+    .catch(e => console.error('Config opslaan mislukt:', e));
 }
 
-const OFFICE_STATUSES = ["hoogeveen","groningen","almere","lochem","breda","goes"];
-const DESK_LOCATIONS = ["hoogeveen","groningen"];
+const OFFICE_STATUSES  = ["hoogeveen","groningen","almere","lochem","breda","goes"];
+const DESK_LOCATIONS   = ["hoogeveen","groningen"];
 
 // ── State ──
 let S = {
-  userName: localStorage.getItem("ecoreest-username") || "",
-  tab: "aanwezigheid", weekOffset: 0,
+  userName:       localStorage.getItem("ecoreest-username") || "",
+  tab:            "aanwezigheid",
+  weekOffset:     0,
   selectedDayIdx: Math.max(0, Math.min(4, new Date().getDay() - 1)),
-  period: "hele_dag", floor: "hgv1",
-  attendance: {},
-  desk: {absences:{}, reservations:{}},
-  adminCfg: null,
-  modal: null, toast: null, adminAuth: false, adminTab: "medewerkers",
+  period:         "hele_dag",
+  floor:          "hgv1",
+  viewMode:       "week",
+  monthOffset:    0,
+  attendance:     {},
+  desk:           { absences: {}, reservations: {} },
+  adminCfg:       null,
+  modal:          null,
+  toast:          null,
+  adminAuth:      false,
+  adminTab:       "medewerkers",
 };
 
 // ── Helpers ──
 const fmtDate = d => d.toISOString().split("T")[0];
-const dKey = d => DAY_KEYS[d.getDay()];
-const fmtNL = d => { const ds=["zo","ma","di","wo","do","vr","za"],ms=["jan","feb","mrt","apr","mei","jun","jul","aug","sep","okt","nov","dec"]; return `${ds[d.getDay()]} ${d.getDate()} ${ms[d.getMonth()]}`; };
-function weekDates(off) { const n=new Date(),m=new Date(n); m.setDate(n.getDate()-((n.getDay()+6)%7)+off*7); return Array.from({length:5},(_,i)=>{const d=new Date(m);d.setDate(m.getDate()+i);return d;}); }
+const dKey    = d => DAY_KEYS[d.getDay()];
+
+const fmtNL = d =>
+  `${DAYS_NL[d.getDay()]} ${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+
+function weekLabel(off) {
+  if (off ===  0) return "Deze week";
+  if (off ===  1) return "Volgende week";
+  if (off === -1) return "Vorige week";
+  return `Week ${off > 0 ? "+" : ""}${off}`;
+}
+
+function weekDates(off) {
+  const n = new Date(), m = new Date(n);
+  m.setDate(n.getDate() - ((n.getDay() + 6) % 7) + off * 7);
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(m);
+    d.setDate(m.getDate() + i);
+    return d;
+  });
+}
+
+function monthDates(off) {
+  const n     = new Date();
+  const first = new Date(n.getFullYear(), n.getMonth() + off, 1);
+  const last  = new Date(n.getFullYear(), n.getMonth() + off + 1, 0);
+  const dates = [];
+  for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() >= 1 && d.getDay() <= 5) dates.push(new Date(d));
+  }
+  return dates;
+}
+
+function monthLabel(off) {
+  const n = new Date();
+  const d = new Date(n.getFullYear(), n.getMonth() + off, 1);
+  return MONTHS_NL[d.getMonth()] + " " + d.getFullYear();
+}
+
+function getWeekNumber(d) {
+  const jan4 = new Date(d.getFullYear(), 0, 4);
+  return Math.ceil(((d - jan4) / 86400000 + jan4.getDay() + 1) / 7);
+}
+
+// ── Network ──
+function postData(data) {
+  return fetch('/api/data', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(data),
+  });
+}
 
 // Sla attendance + desk op naar de server (fire-and-forget)
 function save() {
-  fetch('/api/data', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({attendance: S.attendance, desk: S.desk})
-  }).catch(e => console.error('Opslaan mislukt:', e));
+  postData({ attendance: S.attendance, desk: S.desk })
+    .catch(e => console.error('Opslaan mislukt:', e));
 }
 
-function toast(msg,type="success") { S.toast={msg,type}; render(); setTimeout(()=>{S.toast=null;render();},2500); }
+function toast(msg, type = "success") {
+  S.toast = { msg, type };
+  render();
+  setTimeout(() => { S.toast = null; render(); }, 2500);
+}
 
 // Laad alle gedeelde data van de server bij opstarten
 async function initApp() {
   try {
-    document.getElementById("app").innerHTML = '<div style="text-align:center;padding:60px;color:#7A8B6E;font-family:\'DM Sans\',sans-serif">🌿 Laden...</div>';
+    document.getElementById("app").innerHTML =
+      '<div style="text-align:center;padding:60px;color:#7A8B6E;font-family:\'DM Sans\',sans-serif">🌿 Laden...</div>';
     const resp = await fetch('/api/data');
     if (resp.ok) {
       const data = await resp.json();
       S.attendance = data.attendance || {};
-      S.desk = data.desk || {absences:{}, reservations:{}};
-      S.adminCfg = data.adminCfg || null;
+      S.desk       = data.desk       || { absences: {}, reservations: {} };
+      S.adminCfg   = data.adminCfg   || null;
     }
-  } catch(e) {
+  } catch (e) {
     console.error('Laden mislukt, lokaal verder:', e);
   }
-  if(S.selectedDayIdx<0)S.selectedDayIdx=0;
+  if (S.selectedDayIdx < 0) S.selectedDayIdx = 0;
   render();
 }
 
 // ── Attendance ──
-function getAtt(dk,name,period) { const k=period==="hele_dag"?dk:`${dk}_${period}`; return S.attendance[k]?.[name]||null; }
-function setAtt(dk,name,status,period) { const k=period==="hele_dag"?dk:`${dk}_${period}`; if(!S.attendance[k])S.attendance[k]={}; if(status)S.attendance[k][name]=status; else delete S.attendance[k][name]; save(); }
-function getAttNote(dk,name) { return S.attendance[`${dk}_note`]?.[name]||""; }
-function setAttNote(dk,name,note) { const k=`${dk}_note`; if(!S.attendance[k])S.attendance[k]={}; if(note)S.attendance[k][name]=note; else delete S.attendance[k][name]; save(); }
-function getEffStatus(dk,name) {
-  let st=S.attendance[dk]?.[name]; if(st) return {status:st,period:"hele_dag"};
-  const am=S.attendance[`${dk}_ochtend`]?.[name],pm=S.attendance[`${dk}_middag`]?.[name];
-  if(am&&pm&&am===pm) return {status:am,period:"hele_dag"};
-  if(am||pm) return {status:am||pm,period:am&&pm?"split":(am?"ochtend":"middag"),am,pm};
-  return {status:null};
+function getAtt(dk, name, period) {
+  const k = period === "hele_dag" ? dk : `${dk}_${period}`;
+  return S.attendance[k]?.[name] || null;
+}
+function setAtt(dk, name, status, period) {
+  const k = period === "hele_dag" ? dk : `${dk}_${period}`;
+  if (!S.attendance[k]) S.attendance[k] = {};
+  if (status) S.attendance[k][name] = status;
+  else delete S.attendance[k][name];
+  save();
+}
+function getAttNote(dk, name) {
+  return S.attendance[`${dk}_note`]?.[name] || "";
+}
+function setAttNote(dk, name, note) {
+  const k = `${dk}_note`;
+  if (!S.attendance[k]) S.attendance[k] = {};
+  if (note) S.attendance[k][name] = note;
+  else delete S.attendance[k][name];
+  save();
+}
+function getEffStatus(dk, name) {
+  let st = S.attendance[dk]?.[name];
+  if (st) return { status: st, period: "hele_dag" };
+  const am = S.attendance[`${dk}_ochtend`]?.[name];
+  const pm = S.attendance[`${dk}_middag`]?.[name];
+  if (am && pm && am === pm) return { status: am, period: "hele_dag" };
+  if (am || pm) {
+    return {
+      status: am || pm,
+      period: am && pm ? "split" : (am ? "ochtend" : "middag"),
+      am,
+      pm,
+    };
+  }
+  return { status: null };
 }
 
 // ── Desks ──
 function deskColor(st) {
-  const m={fixed:{fill:"#E8F0E0",stroke:"#5B8C3E",text:"#3D6B27"},available:{fill:"#E8F5E9",stroke:"#66BB6A",text:"#2E7D32"},reserved:{fill:"#E3F2FD",stroke:"#1976D2",text:"#1565C0"},mine:{fill:"#BBDEFB",stroke:"#1565C0",text:"#0D47A1"},flex:{fill:"#F5F5F5",stroke:"#BDBDBD",text:"#757575"}};
-  return m[st]||{fill:"#F5F5F5",stroke:"#ccc",text:"#999"};
+  const m = {
+    fixed:     { fill: "#E8F0E0", stroke: "#5B8C3E", text: "#3D6B27" },
+    available: { fill: "#E8F5E9", stroke: "#66BB6A", text: "#2E7D32" },
+    reserved:  { fill: "#E3F2FD", stroke: "#1976D2", text: "#1565C0" },
+    mine:      { fill: "#BBDEFB", stroke: "#1565C0", text: "#0D47A1" },
+    flex:      { fill: "#F5F5F5", stroke: "#BDBDBD", text: "#757575" },
+  };
+  return m[st] || { fill: "#F5F5F5", stroke: "#ccc", text: "#999" };
 }
-function computeDesks(dk,dy,loc) {
-  const cfg=getCfg();
-  const schedule=loc==="grn"?cfg.grn:loc==="hgv_bg"?cfg.hgv_bg:cfg.hgv;
-  const maxId=loc==="grn"?8:loc==="hgv_bg"?20:11;
-  const pfx=loc==="grn"?"grn_":loc==="hgv_bg"?"hgvbg_":"";
+
+function computeDesks(dk, dy, loc) {
+  const cfg      = getCfg();
+  const schedule = loc === "grn" ? cfg.grn : loc === "hgv_bg" ? cfg.hgv_bg : cfg.hgv;
+  const maxId    = loc === "grn" ? 8 : loc === "hgv_bg" ? 20 : 11;
+  const pfx      = loc === "grn" ? "grn_" : loc === "hgv_bg" ? "hgvbg_" : "";
   // Determine which attendance statuses count as "present" for this floor
-  const locStatuses = loc==="grn"?["groningen"]:["hoogeveen"];
-  const res=S.desk.reservations[pfx+dk]||{}; const abs=S.desk.absences[pfx+dk]||{};
-  const states={};
-  for(let id=1;id<=maxId;id++){
-    const fixed=schedule[id]?.[dy]||null;
-    if(fixed){
-      const eff=getEffStatus(dk,fixed);
+  const locStatuses = loc === "grn" ? ["groningen"] : ["hoogeveen"];
+  const res    = S.desk.reservations[pfx + dk] || {};
+  const abs    = S.desk.absences[pfx + dk]     || {};
+  const states = {};
+  for (let id = 1; id <= maxId; id++) {
+    const fixed = schedule[id]?.[dy] || null;
+    if (fixed) {
+      const eff = getEffStatus(dk, fixed);
       // Person is absent if: non-office status (thuis/veld/vrij/ziek), OR at a different office, OR manually marked absent
       const isAtDifferentOffice = eff.status && OFFICE_STATUSES.includes(eff.status) && !locStatuses.includes(eff.status);
-      const isNonOffice = eff.status && !OFFICE_STATUSES.includes(eff.status);
-      const absent = isNonOffice || isAtDifferentOffice || abs[id];
-      if(absent){ if(res[id]) states[id]={status:res[id]===S.userName?"mine":"reserved",fixedPerson:fixed,displayName:res[id],reservedBy:res[id]}; else states[id]={status:"available",fixedPerson:fixed,displayName:"vrij"}; }
-      else states[id]={status:"fixed",fixedPerson:fixed,displayName:fixed};
+      const isNonOffice         = eff.status && !OFFICE_STATUSES.includes(eff.status);
+      const absent              = isNonOffice || isAtDifferentOffice || abs[id];
+      if (absent) {
+        if (res[id]) {
+          states[id] = { status: res[id] === S.userName ? "mine" : "reserved", fixedPerson: fixed, displayName: res[id], reservedBy: res[id] };
+        } else {
+          states[id] = { status: "available", fixedPerson: fixed, displayName: "vrij" };
+        }
+      } else {
+        states[id] = { status: "fixed", fixedPerson: fixed, displayName: fixed };
+      }
     } else {
-      if(res[id]){const r=res[id];states[id]={status:r===S.userName?"mine":"reserved",displayName:r,reservedBy:r};}
-      else states[id]={status:"flex",displayName:"flex"};
+      if (res[id]) {
+        const r = res[id];
+        states[id] = { status: r === S.userName ? "mine" : "reserved", displayName: r, reservedBy: r };
+      } else {
+        states[id] = { status: "flex", displayName: "flex" };
+      }
     }
   }
   return states;
 }
-function hasFixedDesk(name,dy,loc,dateKey) {
-  const cfg=getCfg();
-  function checkSchedule(schedule,maxId,locId) {
-    for(let id=1;id<=maxId;id++){
-      const f=schedule[id]?.[dy];
-      if(f&&f.split(" ")[0]===name.split(" ")[0]) {
+
+function hasFixedDesk(name, dy, loc, dateKey) {
+  const cfg = getCfg();
+  function checkSchedule(schedule, maxId, locId) {
+    for (let id = 1; id <= maxId; id++) {
+      const f = schedule[id]?.[dy];
+      if (f && f.split(" ")[0] === name.split(" ")[0]) {
         // Found a fixed desk — but is it actually active (not absent)?
-        if(dateKey) {
-          const ds=computeDesks(dateKey,dy,locId);
-          if(ds[id]?.status!=="fixed") return null; // desk was freed up
+        if (dateKey) {
+          const ds = computeDesks(dateKey, dy, locId);
+          if (ds[id]?.status !== "fixed") return null; // desk was freed up
         }
-        return locId==="grn"?`G${id}`:locId==="hgv_bg"?`BG${id}`:id;
+        return locId === "grn" ? `G${id}` : locId === "hgv_bg" ? `BG${id}` : id;
       }
     }
     return null;
   }
-  let result=null;
-  if(!loc||loc==="hoogeveen") {
-    result=checkSchedule(cfg.hgv,11,"hgv");
-    if(!result) result=checkSchedule(cfg.hgv_bg,20,"hgv_bg");
+  let result = null;
+  if (!loc || loc === "hoogeveen") {
+    result = checkSchedule(cfg.hgv, 11, "hgv");
+    if (!result) result = checkSchedule(cfg.hgv_bg, 20, "hgv_bg");
   }
-  if(!result&&(!loc||loc==="groningen")) {
-    result=checkSchedule(cfg.grn,8,"grn");
+  if (!result && (!loc || loc === "groningen")) {
+    result = checkSchedule(cfg.grn, 8, "grn");
   }
   return result;
 }
 
+// ── Week badge (top-level — calls getCfg() internally) ──
+function wBadge(dk, name) {
+  const cfg  = getCfg();
+  const e    = getEffStatus(dk, name);
+  const n    = getAttNote(dk, name);
+  if (!e.status) return `<span class="week-badge wb-none">—</span>`;
+  const st       = cfg.statuses.find(s => s.id === e.status);
+  const noteHtml = n
+    ? `<div style="font-size:8px;color:#999;font-style:italic;line-height:1.1;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 auto;cursor:pointer" onclick="toast('${name}: ${n.replace(/'/g, "\\'")}','info')">${n}</div>`
+    : "";
+  if (e.am && e.pm && e.am !== e.pm) {
+    const amCls = cfg.statuses.find(s => s.id === e.am)?.cls || "none";
+    return `<span class="week-badge wb-${amCls}" style="font-size:8px">${STATUS_SHORTS[e.am] || e.am}/${STATUS_SHORTS[e.pm] || e.pm}</span>${noteHtml}`;
+  }
+  return `<span class="week-badge wb-${st?.cls || "none"}">${STATUS_SHORTS[e.status] || e.status}</span>${noteHtml}`;
+}
+
+// ── Attendance counts for a single day ──
+function countAttendance(dk, empNames) {
+  let kantoor = 0, thuis = 0, veld = 0, vrij = 0;
+  for (const n of empNames) {
+    const e = getEffStatus(dk, n);
+    if (OFFICE_STATUSES.includes(e.status))           kantoor++;
+    else if (e.status === "thuis")                    thuis++;
+    else if (e.status === "veld")                     veld++;
+    else if (e.status === "vrij" || e.status === "ziek") vrij++;
+  }
+  return { kantoor, thuis, veld, vrij };
+}
+
+// ── Stats bar renderer ──
+// items: [{num, lbl, color}]
+function renderStatsBar(items) {
+  const cells = items.map(({ num, lbl, color }) =>
+    `<div class="stat"><div class="num" style="color:${color}">${num}</div><div class="lbl">${lbl}</div></div>`
+  ).join("");
+  return `<div class="stats-bar">${cells}</div>`;
+}
+
+// ── Desk stats bar (fixed / available+flex / reserved+mine) ──
+function renderDeskStats(ds) {
+  const vals = Object.values(ds);
+  const fC   = vals.filter(s => s.status === "fixed").length;
+  const aC   = vals.filter(s => s.status === "available" || s.status === "flex").length;
+  const rC   = vals.filter(s => s.status === "reserved"  || s.status === "mine").length;
+  return renderStatsBar([
+    { num: fC, lbl: "Bezet",        color: "var(--eco-green)"  },
+    { num: aC, lbl: "Vrij",         color: "var(--eco-accent)" },
+    { num: rC, lbl: "Gereserveerd", color: "var(--eco-blue)"   },
+  ]);
+}
+
+// ── Single floor: stats + SVG + hint ──
+function renderFloor(dk, dy, sel, loc, svgFn) {
+  const ds = computeDesks(dk, dy, loc);
+  return renderDeskStats(ds)
+    + `<div class="plan-card"><h3>Plattegrond — ${fmtNL(sel)}</h3>${svgFn(ds)}</div>`
+    + `<div class="hint">Klik op een bureau om te reserveren of details te bekijken.</div>`;
+}
+
+// ── Week overview table (aanwezigheid) ──
+function renderWeekOverview(cfg, wd, dk) {
+  let teamRows = "";
+  for (const entry of cfg.employees) {
+    if (entry === "|") {
+      teamRows += `<tr class="team-sep"><td colspan="6"></td></tr>`;
+      continue;
+    }
+    const isMe = entry === S.userName;
+    let cells = `<td>${entry}${isMe ? ' 👤' : ''}</td>`;
+    for (let i = 0; i < 5; i++) cells += `<td>${wBadge(fmtDate(wd[i]), entry)}</td>`;
+    teamRows += `<tr${isMe ? ' class="me"' : ''}>${cells}</tr>`;
+  }
+  const headers = ["ma","di","wo","do","vr"].map((d, i) => {
+    const dt = wd[i];
+    return `<th${S.selectedDayIdx === i ? ' style="color:var(--eco-green-dark)"' : ''}>${d}<br><span style="font-weight:400;font-size:9px">${dt.getDate()}</span></th>`;
+  }).join("");
+  return `<div class="att-card"><h3>Weekoverzicht</h3><div class="team-list"><table class="team-table"><thead><tr><th></th>${headers}</tr></thead><tbody>${teamRows}</tbody></table></div></div>`;
+}
+
+// ── Month calendar table (aanwezigheid) ──
+function renderMonthOverview(dk, today) {
+  const mDates  = monthDates(S.monthOffset);
+  const today2  = fmtDate(new Date());
+  const weekMap = new Map();
+  for (const d of mDates) {
+    const wk  = getWeekNumber(d);
+    const key = `${d.getFullYear()}-${wk}`;
+    if (!weekMap.has(key)) weekMap.set(key, { wk, dates: [null, null, null, null, null] });
+    weekMap.get(key).dates[d.getDay() - 1] = d;
+  }
+  let mRows = "";
+  for (const { wk, dates } of weekMap.values()) {
+    mRows += `<tr><td style="font-size:10px;color:var(--eco-muted);font-weight:600;padding:4px 4px 4px 12px">W${wk}</td>`;
+    for (const d of dates) {
+      if (!d) { mRows += '<td></td>'; continue; }
+      const dk2        = fmtDate(d);
+      const isToday    = dk2 === today2;
+      const cell       = S.userName ? wBadge(dk2, S.userName) : `<span style="font-size:10px;color:#ddd">—</span>`;
+      const isSelected = dk2 === dk;
+      mRows += `<td class="month-cell${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}" onclick="selectDate('${dk2}')"><div class="month-date${isToday ? ' today' : ''}">${d.getDate()}</div>${cell}</td>`;
+    }
+    mRows += '</tr>';
+  }
+  return `<div class="att-card"><h3>Maandoverzicht — ${monthLabel(S.monthOffset)}${S.userName ? ` — ${S.userName}` : ''}</h3><div class="team-list"><table class="team-table"><thead><tr><th></th><th>ma</th><th>di</th><th>wo</th><th>do</th><th>vr</th></tr></thead><tbody>${mRows}</tbody></table></div></div><div class="hint">Klik op een dag om de status te bekijken of aan te passen.</div>`;
+}
+
+// ── Admin desk grid (eliminates repetition for hgv / hgv_bg / grn) ──
+// loc: "hgv" | "hgv_bg" | "grn"
+// maxId: 11 | 20 | 8
+// labelPrefix: "" (produces "1".."11") | "G" (produces "G1".."G8")
+function renderAdminDeskGrid(loc, maxId, cfg, labelPrefix) {
+  const schedule = loc === "grn" ? cfg.grn : loc === "hgv_bg" ? cfg.hgv_bg : cfg.hgv;
+  let grid = `<div class="admin-grid"><div class="lbl">Plek</div>${DAYS.map(d => `<div class="lbl">${d}</div>`).join("")}`;
+  for (let id = 1; id <= maxId; id++) {
+    grid += `<div class="desk-label">${labelPrefix}${id}</div>`;
+    DAYS.forEach(d => {
+      const v = schedule[id]?.[d] || "";
+      grid += `<input value="${v}" onchange="admSetDesk('${loc}',${id},'${d}',this.value)"/>`;
+    });
+  }
+  grid += `</div>`;
+  return grid;
+}
+
 // ── SVG Floors ──
-function svgDesk(d,s,prefix,onclick) {
-  const c=deskColor(s?.status);const icon=s?.status==="available"?"✓":(s?.status==="reserved"||s?.status==="mine")?"📌":"";
-  const lbl=prefix?`${prefix}${d.id}`:d.id;
+function svgDesk(d, s, prefix, onclick) {
+  const c    = deskColor(s?.status);
+  const icon = s?.status === "available" ? "✓" : (s?.status === "reserved" || s?.status === "mine") ? "📌" : "";
+  const lbl  = prefix ? `${prefix}${d.id}` : d.id;
   return `<g class="desk" onclick="${onclick}" data-desk="${d.id}"><rect x="${d.x+2}" y="${d.y+2}" width="${d.w}" height="${d.h}" rx="6" fill="rgba(0,0,0,0.04)"/><rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" rx="6" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2"/><text x="${d.x+d.w/2}" y="${d.y+(d.r?35:20)}" text-anchor="middle" font-size="15" font-weight="700" fill="${c.text}" font-family="'DM Sans',sans-serif">${lbl}</text><text x="${d.x+d.w/2}" y="${d.y+(d.r?55:38)}" text-anchor="middle" font-size="${d.r?9:10}" font-weight="500" fill="${c.text}" font-family="'DM Sans',sans-serif" opacity="0.85">${s?.displayName||""}</text>${icon?`<text x="${d.x+d.w-14}" y="${d.y+16}" font-size="12">${icon}</text>`:""}</g>`;
 }
-const LEGEND=`<g transform="translate(30,450)">${[{c:"#E8F0E0",s:"#5B8C3E",l:"Vast"},{c:"#E8F5E9",s:"#66BB6A",l:"Beschikbaar"},{c:"#E3F2FD",s:"#1976D2",l:"Gereserveerd"},{c:"#F5F5F5",s:"#BDBDBD",l:"Flex"}].map((i,n)=>`<rect x="${n*150}" y="-10" width="14" height="14" rx="3" fill="${i.c}" stroke="${i.s}" stroke-width="1.5"/><text x="${n*150+20}" y="2" font-size="11" fill="#666" font-family="'DM Sans',sans-serif">${i.l}</text>`).join("")}</g>`;
+
+const LEGEND = `<g transform="translate(30,450)">${[{c:"#E8F0E0",s:"#5B8C3E",l:"Vast"},{c:"#E8F5E9",s:"#66BB6A",l:"Beschikbaar"},{c:"#E3F2FD",s:"#1976D2",l:"Gereserveerd"},{c:"#F5F5F5",s:"#BDBDBD",l:"Flex"}].map((i,n)=>`<rect x="${n*150}" y="-10" width="14" height="14" rx="3" fill="${i.c}" stroke="${i.s}" stroke-width="1.5"/><text x="${n*150+20}" y="2" font-size="11" fill="#666" font-family="'DM Sans',sans-serif">${i.l}</text>`).join("")}</g>`;
 
 function svgHGV(ds) {
   const L=[{id:5,x:60,y:55,w:80,h:50},{id:6,x:60,y:115,w:80,h:50},{id:4,x:200,y:75,w:50,h:80,r:1},{id:3,x:250,y:75,w:50,h:80,r:1},{id:2,x:340,y:55,w:80,h:50},{id:1,x:340,y:115,w:80,h:50},{id:7,x:60,y:310,w:80,h:50},{id:8,x:60,y:370,w:80,h:50},{id:9,x:140,y:310,w:50,h:80,r:1},{id:10,x:340,y:310,w:80,h:50},{id:11,x:340,y:370,w:80,h:50}];
   return `<svg viewBox="0 0 700 480" width="100%" style="display:block"><rect x="20" y="20" width="660" height="440" rx="12" fill="none" stroke="#D7E0CC" stroke-width="2.5"/><line x1="20" y1="230" x2="460" y2="230" stroke="#D7E0CC" stroke-width="2"/><rect x="480" y="20" width="200" height="210" rx="8" fill="#F9FBF7" stroke="#D7E0CC" stroke-width="1.5"/><text x="580" y="130" text-anchor="middle" font-size="12" fill="#9CAF88" font-family="'DM Sans',sans-serif" font-weight="500">vergaderzaal</text><rect x="490" y="300" width="90" height="50" rx="6" fill="#FFF8E1" stroke="#E0D5A0" stroke-width="1" stroke-dasharray="4 2"/><text x="535" y="330" text-anchor="middle" font-size="11" fill="#B0A060" font-family="'DM Sans',sans-serif">trapgat</text><rect x="600" y="300" width="70" height="50" rx="6" fill="#FFF3E0" stroke="#E0C5A0" stroke-width="1" stroke-dasharray="4 2"/><text x="635" y="330" text-anchor="middle" font-size="11" fill="#C09060" font-family="'DM Sans',sans-serif">kantine</text>${[100,200,300,400].map(x=>`<rect x="${x-15}" y="18" width="30" height="6" rx="3" fill="#C5E1A5" opacity="0.5"/>`).join("")}${L.map(d=>svgDesk(d,ds[d.id],"",`deskClick(${d.id})`)).join("")}${LEGEND}</svg>`;
 }
+
 function svgGRN(ds) {
   const L=[{id:1,x:60,y:55,w:50,h:80,r:1},{id:2,x:110,y:55,w:50,h:80,r:1},{id:3,x:60,y:310,w:50,h:80,r:1},{id:4,x:110,y:310,w:50,h:80,r:1},{id:5,x:280,y:310,w:50,h:80,r:1},{id:6,x:330,y:310,w:50,h:80,r:1},{id:7,x:480,y:290,w:100,h:50},{id:8,x:480,y:350,w:100,h:50}];
   return `<svg viewBox="0 0 700 480" width="100%" style="display:block"><rect x="20" y="20" width="660" height="440" rx="12" fill="none" stroke="#D7E0CC" stroke-width="2.5"/><rect x="280" y="20" width="100" height="30" fill="#F9FBF7" stroke="#D7E0CC" stroke-width="1.5"/><text x="330" y="40" text-anchor="middle" font-size="11" fill="#9CAF88" font-family="'DM Sans',sans-serif">gang</text><rect x="520" y="30" width="70" height="30" rx="6" fill="#FFF8E1" stroke="#E0D5A0" stroke-width="1" stroke-dasharray="4 2"/><text x="555" y="50" text-anchor="middle" font-size="10" fill="#B0A060" font-family="'DM Sans',sans-serif">kapstok</text><rect x="620" y="20" width="60" height="440" fill="#FFF3E0" stroke="#E0C5A0" stroke-width="1.5"/><text x="650" y="250" text-anchor="middle" font-size="12" fill="#C09060" font-family="'DM Sans',sans-serif" font-weight="500" transform="rotate(90,650,250)">kantine</text><rect x="210" y="300" width="40" height="50" rx="4" fill="#F0F0F0" stroke="#D0D0D0" stroke-width="1.5"/><line x1="210" y1="300" x2="250" y2="350" stroke="#D0D0D0" stroke-width="1"/><line x1="250" y1="300" x2="210" y2="350" stroke="#D0D0D0" stroke-width="1"/><rect x="210" y="355" width="40" height="50" rx="4" fill="#F0F0F0" stroke="#D0D0D0" stroke-width="1.5"/><line x1="210" y1="355" x2="250" y2="405" stroke="#D0D0D0" stroke-width="1"/><line x1="250" y1="355" x2="210" y2="405" stroke="#D0D0D0" stroke-width="1"/><rect x="470" y="278" width="120" height="135" rx="8" fill="none" stroke="#D7E0CC" stroke-width="1.5"/>${[100,200,340,400].map(y=>`<rect x="18" y="${y}" width="6" height="30" rx="3" fill="#C5E1A5" opacity="0.5"/>`).join("")}${[100,200,350,450].map(x=>`<rect x="${x}" y="456" width="30" height="6" rx="3" fill="#C5E1A5" opacity="0.5"/>`).join("")}${L.map(d=>svgDesk(d,ds[d.id],"G",`deskClick(${d.id},'grn')`)).join("")}${LEGEND}</svg>`;
@@ -517,163 +783,303 @@ function svgHGV_BG(ds) {
   </svg>`;
 }
 
-// ── Render ──
+// ── Modal HTML ──
+function renderModal() {
+  if (!S.modal) return "";
+  const m  = S.modal, s = m.state, dl = m.dateLabel, lb = m.label || m.deskId, pf = m.pfx || "";
+  let mc = "";
+  if (s.status === "fixed") {
+    mc = `<h3>Plek ${lb} — ${s.fixedPerson}</h3><p>Vaste werkplek op ${dl}.<br>Is ${s.fixedPerson.split(" ")[0]} afwezig?</p><div class="modal-actions"><button class="modal-btn orange" onclick="markAbsent(${m.deskId},'${m.dateKey}','${pf}')">🏠 Afmelden</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
+  } else if (s.status === "available") {
+    mc = `<h3>Plek ${lb} — beschikbaar</h3><p>Vrij op ${dl}.</p><div class="modal-actions"><button class="modal-btn green" onclick="reserveDesk(${m.deskId},'${m.dateKey}','${pf}')">📌 Reserveren</button><button class="modal-btn ghost" onclick="unmarkAbsent(${m.deskId},'${m.dateKey}','${pf}')">Afmelding ongedaan</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
+  } else if (s.status === "flex") {
+    mc = `<h3>Plek ${lb} — flexplek</h3><p>Vrij te reserveren op ${dl}.</p><div class="modal-actions"><button class="modal-btn green" onclick="reserveDesk(${m.deskId},'${m.dateKey}','${pf}')">📌 Reserveren</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
+  } else if (s.status === "mine") {
+    mc = `<h3>Plek ${lb} — jouw reservering</h3><p>Gereserveerd op ${dl}.</p><div class="modal-actions"><button class="modal-btn red" onclick="cancelRes(${m.deskId},'${m.dateKey}','${pf}')">Annuleren</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
+  } else if (s.status === "reserved") {
+    mc = `<h3>Plek ${lb} — gereserveerd</h3><p>Door <strong>${s.reservedBy}</strong> op ${dl}.</p><div class="modal-actions"><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
+  }
+  return `<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${mc}</div></div>`;
+}
+
+// ── Tab renderers ──
+function renderAanwezigheid(cfg, dk, dy, sel, wd, today, empNames) {
+  const myStatus  = getAtt(dk, S.userName, S.period);
+  const myNote    = getAttNote(dk, S.userName);
+  const chipHtml  = cfg.statuses.map(s =>
+    `<div class="att-chip ${s.cls}${myStatus === s.id ? " selected" : ""}" onclick="setMyStatus('${dk}','${s.id}')">${s.label}</div>`
+  ).join("");
+
+  const { kantoor, thuis, veld, vrij } = countAttendance(dk, empNames);
+  const statsHtml = renderStatsBar([
+    { num: kantoor, lbl: "Kantoor", color: "var(--eco-green)"  },
+    { num: thuis,   lbl: "Thuis",   color: "var(--eco-blue)"   },
+    { num: veld,    lbl: "Veld",    color: "var(--eco-orange)" },
+    { num: vrij,    lbl: "Vrij/Ziek", color: "#9E9E9E"         },
+  ]);
+
+  const filterBar = `<div class="filter-bar" style="justify-content:flex-end"><div class="view-toggle"><button class="view-btn${S.viewMode === 'week' ? ' active' : ''}" onclick="setViewMode('week')">Week</button><button class="view-btn${S.viewMode === 'maand' ? ' active' : ''}" onclick="setViewMode('maand')">Maand</button></div></div>`;
+
+  const overviewHtml = S.viewMode === 'week'
+    ? renderWeekOverview(cfg, wd, dk)
+    : renderMonthOverview(dk, today);
+
+  const noteSection = S.userName
+    ? `<div class="att-note"><input id="noteInput" placeholder="Opmerking (bijv. 'tot 14:00')" value="${myNote}" onkeydown="if(event.key==='Enter')saveNote('${dk}')"/><button onclick="saveNote('${dk}')">Opslaan</button></div>`
+    : "";
+
+  return `${statsHtml}
+    <div class="att-card"><h3>Jouw status — ${fmtNL(sel)}</h3><div class="period-toggle"><div class="period-btn${S.period === "hele_dag" ? " active" : ""}" onclick="setPeriod('hele_dag')">Hele dag</div><div class="period-btn${S.period === "ochtend" ? " active" : ""}" onclick="setPeriod('ochtend')">Ochtend</div><div class="period-btn${S.period === "middag" ? " active" : ""}" onclick="setPeriod('middag')">Middag</div></div><div class="att-my"><div class="att-my-row">${S.userName ? chipHtml : '<span style="color:#aaa;font-size:13px">Vul eerst je naam in</span>'}</div>${noteSection}</div></div>
+    ${filterBar}${overviewHtml}`;
+}
+
+function renderWerkplekken(cfg, dk, dy, sel) {
+  if (S.floor !== "hgv1" && S.floor !== "hgv0" && S.floor !== "grn") S.floor = "hgv1";
+  const ci = FLOORS.findIndex(f => f.id === S.floor);
+  const cf = FLOORS[ci] || FLOORS[0];
+  const fc = renderFloor(dk, dy, sel, cf.loc, cf.svgFn);
+  return `<div class="floor-nav"><button onclick="chgFloor(-1)"${ci > 0 ? "" : " disabled"}>‹</button><div class="floor-label">${cf.label}${cf.sub ? `<br><span class="floor-sub">${cf.sub}</span>` : ""}</div><button onclick="chgFloor(1)"${ci < FLOORS.length - 1 ? "" : " disabled"}>›</button></div>${fc}`;
+}
+
+function renderAdmin(cfg, empNames) {
+  if (!S.adminAuth) {
+    return `<div class="admin-section"><div class="pw-section"><h3 style="margin-bottom:16px;text-transform:none;font-size:16px">🔒 Admin</h3><p style="color:var(--eco-muted);font-size:13px;margin-bottom:16px">Voer het wachtwoord in om instellingen te beheren.</p><input id="adminPw" type="password" placeholder="Wachtwoord" onkeydown="if(event.key==='Enter')adminLogin()"/><br><button class="btn" onclick="adminLogin()">Inloggen</button></div></div>`;
+  }
+
+  const atabs = [
+    { id: "medewerkers",  label: "👥 Medewerkers" },
+    { id: "hgv_schema",   label: "🏢 HGV 1e"      },
+    { id: "hgv_bg_schema",label: "🏢 HGV BG"      },
+    { id: "grn_schema",   label: "🏢 GRN"          },
+    { id: "statussen",    label: "📍 Statussen"    },
+  ];
+  let adminContent = "";
+
+  if (S.adminTab === "medewerkers") {
+    let rows = "";
+    cfg.employees.forEach((e, i) => {
+      if (e === "|") {
+        rows += `<div class="admin-row" style="background:var(--eco-border);height:3px;padding:0"></div>`;
+      } else {
+        rows += `<div class="admin-row"><span class="name">${e}</span><button class="btn btn-sm btn-red" onclick="admRemoveEmp(${i})">✕</button></div>`;
+      }
+    });
+    adminContent = `<div class="admin-section"><h3>Medewerkers (${empNames.length})</h3>${rows}<div style="margin-top:12px;display:flex;gap:8px"><input id="newEmp" class="admin-input" placeholder="Nieuwe medewerker" style="flex:1" onkeydown="if(event.key==='Enter')admAddEmp()"/><button class="btn btn-sm" onclick="admAddEmp()">+ Toevoegen</button></div><div style="margin-top:8px"><button class="btn btn-sm btn-ghost" onclick="admAddSep()">— Scheidingslijn toevoegen</button></div><div class="admin-info">Verwijder en voeg toe om de volgorde aan te passen. Scheidingslijnen maken groepen.</div></div>`;
+  }
+
+  if (S.adminTab === "hgv_schema") {
+    const grid = renderAdminDeskGrid("hgv", 11, cfg, "");
+    adminContent = `<div class="admin-section"><h3>Hoogeveen 1e verdieping — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek.</div></div>`;
+  }
+
+  if (S.adminTab === "hgv_bg_schema") {
+    const grid = renderAdminDeskGrid("hgv_bg", 20, cfg, "");
+    adminContent = `<div class="admin-section"><h3>Hoogeveen Begane grond — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek. Naomi's plek is apart (niet in schema).</div></div>`;
+  }
+
+  if (S.adminTab === "grn_schema") {
+    const grid = renderAdminDeskGrid("grn", 8, cfg, "G");
+    adminContent = `<div class="admin-section"><h3>Groningen — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek.</div></div>`;
+  }
+
+  if (S.adminTab === "statussen") {
+    const rows = cfg.statuses.map((s, i) =>
+      `<div class="admin-row"><span class="name"><span class="att-chip ${s.cls} selected" style="cursor:default;font-size:11px;padding:4px 8px">${s.label}</span></span><span style="font-size:11px;color:var(--eco-muted)">${s.id}</span><button class="btn btn-sm btn-red" onclick="admRemoveStatus(${i})">✕</button></div>`
+    ).join("");
+    adminContent = `<div class="admin-section"><h3>Statussen / Vestigingen</h3>${rows}<div style="margin-top:12px;display:flex;gap:8px"><input id="newStatId" class="admin-input" placeholder="id (bijv. utrecht)" style="flex:1" /><input id="newStatLabel" class="admin-input" placeholder="Label (bijv. Utrecht)" style="flex:1" /><button class="btn btn-sm" onclick="admAddStatus()">+</button></div><div class="admin-info">ID moet uniek zijn (kleine letters, geen spaties). Label is wat gebruikers zien.</div></div>`;
+  }
+
+  const tabBar  = atabs.map(t => `<div class="admin-tab${S.adminTab === t.id ? " active" : ""}" onclick="S.adminTab='${t.id}';render()">${t.label}</div>`).join("");
+  const actions = `<div style="margin-top:12px;text-align:center"><button class="btn btn-sm btn-ghost" onclick="syncAfas()" style="margin-right:8px">↕ Sync AFAS</button><button class="btn btn-sm btn-ghost" onclick="admReset()" style="margin-right:8px">🔄 Reset naar standaard</button><button class="btn btn-sm btn-ghost" onclick="S.adminAuth=false;render()">🔒 Uitloggen</button></div>`;
+  return `<div class="admin-tabs">${tabBar}</div>${adminContent}${actions}`;
+}
+
+// ── Main render ──
 function render() {
-  const cfg=getCfg();
-  const wd=weekDates(S.weekOffset),sel=wd[S.selectedDayIdx],dk=fmtDate(sel),dy=dKey(sel),today=fmtDate(new Date());
-  const wl=S.weekOffset===0?"Deze week":S.weekOffset===1?"Volgende week":S.weekOffset===-1?"Vorige week":`Week ${S.weekOffset>0?"+":""}${S.weekOffset}`;
-  const empNames=cfg.employees.filter(e=>e!=="|");
+  const cfg      = getCfg();
+  const wd       = weekDates(S.weekOffset);
+  const sel      = wd[S.selectedDayIdx];
+  const dk       = fmtDate(sel);
+  const dy       = dKey(sel);
+  const today    = fmtDate(new Date());
+  const empNames = cfg.employees.filter(e => e !== "|");
 
+  // User row
   let userHtml;
-  if(!S.userName) userHtml=`<div class="name-section"><input id="ni" placeholder="Je naam" onkeydown="if(event.key==='Enter')saveName()"/><button class="btn" onclick="saveName()">Start</button></div>`;
-  else userHtml=`<div class="user-row"><div class="user-pill">👤 ${S.userName}</div><button class="link-btn" onclick="clearName()">wijzig</button></div>`;
-
-  const dayHtml=wd.map((d,i)=>`<div class="day-tab${S.selectedDayIdx===i?" active":""}${fmtDate(d)===today?" today":""}" onclick="selDay(${i})"><div class="dn">${fmtNL(d).split(" ")[0]}</div><div class="dd">${d.getDate()}</div></div>`).join("");
-
-  let content="";
-
-  // ── AANWEZIGHEID TAB ──
-  if(S.tab==="aanwezigheid") {
-    const myStatus=getAtt(dk,S.userName,S.period),myNote=getAttNote(dk,S.userName);
-    const chipHtml=cfg.statuses.map(s=>`<div class="att-chip ${s.cls}${myStatus===s.id?" selected":""}" onclick="setMyStatus('${dk}','${s.id}')">${s.label}</div>`).join("");
-    const shorts={hoogeveen:"HGV",groningen:"GRN",almere:"ALM",lochem:"LOC",breda:"BRE",goes:"GOES",thuis:"Thuis",veld:"Veld/ext",vrij:"Vrij",ziek:"Ziek"};
-    function wBadge(dk2,name){const e=getEffStatus(dk2,name),n=getAttNote(dk2,name);if(!e.status)return`<span class="week-badge wb-none">—</span>`;const st=cfg.statuses.find(s=>s.id===e.status);const noteHtml=n?`<div style="font-size:8px;color:#999;font-style:italic;line-height:1.1;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 auto;cursor:pointer" onclick="toast('${name}: ${n.replace(/'/g,"\\'")}','info')">${n}</div>`:"";if(e.am&&e.pm&&e.am!==e.pm){return`<span class="week-badge wb-${cfg.statuses.find(s=>s.id===e.am)?.cls||'none'}" style="font-size:8px">${shorts[e.am]||e.am}/${shorts[e.pm]||e.pm}</span>${noteHtml}`;}return`<span class="week-badge wb-${st?.cls||'none'}">${shorts[e.status]||e.status}</span>${noteHtml}`;}
-    let teamRows="";
-    for(const entry of cfg.employees){if(entry==="|"){teamRows+=`<tr class="team-sep"><td colspan="6"></td></tr>`;continue;}const isMe=entry===S.userName;let cells=`<td>${entry}${isMe?' 👤':''}</td>`;for(let i=0;i<5;i++)cells+=`<td>${wBadge(fmtDate(wd[i]),entry)}</td>`;teamRows+=`<tr${isMe?' class="me"':''}>${cells}</tr>`;}
-    let cK=0,cT=0,cV=0,cF=0;for(const n of empNames){const e=getEffStatus(dk,n);if(OFFICE_STATUSES.includes(e.status))cK++;else if(e.status==="thuis")cT++;else if(e.status==="veld")cV++;else if(e.status==="vrij"||e.status==="ziek")cF++;}
-    content=`<div class="stats-bar"><div class="stat"><div class="num" style="color:var(--eco-green)">${cK}</div><div class="lbl">Kantoor</div></div><div class="stat"><div class="num" style="color:var(--eco-blue)">${cT}</div><div class="lbl">Thuis</div></div><div class="stat"><div class="num" style="color:var(--eco-orange)">${cV}</div><div class="lbl">Veld</div></div><div class="stat"><div class="num" style="color:#9E9E9E">${cF}</div><div class="lbl">Vrij/Ziek</div></div></div>
-    <div class="att-card"><h3>Jouw status — ${fmtNL(sel)}</h3><div class="period-toggle"><div class="period-btn${S.period==="hele_dag"?" active":""}" onclick="setPeriod('hele_dag')">Hele dag</div><div class="period-btn${S.period==="ochtend"?" active":""}" onclick="setPeriod('ochtend')">Ochtend</div><div class="period-btn${S.period==="middag"?" active":""}" onclick="setPeriod('middag')">Middag</div></div><div class="att-my"><div class="att-my-row">${S.userName?chipHtml:'<span style="color:#aaa;font-size:13px">Vul eerst je naam in</span>'}</div>${S.userName?`<div class="att-note"><input id="noteInput" placeholder="Opmerking (bijv. 'tot 14:00')" value="${myNote}" onkeydown="if(event.key==='Enter')saveNote('${dk}')"/><button onclick="saveNote('${dk}')">Opslaan</button></div>`:""}</div></div>
-    <div class="att-card"><h3>Weekoverzicht</h3><div class="team-list"><table class="team-table"><thead><tr><th></th>${["ma","di","wo","do","vr"].map((d,i)=>{const dt=wd[i];return`<th${S.selectedDayIdx===i?' style="color:var(--eco-green-dark)"':''}>${d}<br><span style="font-weight:400;font-size:9px">${dt.getDate()}</span></th>`;}).join("")}</tr></thead><tbody>${teamRows}</tbody></table></div></div>`;
+  if (!S.userName) {
+    const nameOpts = empNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    userHtml = `<div class="name-section"><select id="ni"><option value="">— Kies je naam —</option>${nameOpts}</select><button class="btn" onclick="saveName()">Start</button></div>`;
+  } else {
+    userHtml = `<div class="user-row"><div class="user-pill">👤 ${S.userName}</div><button class="link-btn" onclick="clearName()">wijzig</button></div>`;
   }
 
-  // ── WERKPLEKKEN TAB ──
-  if(S.tab==="werkplekken") {
-    // Ensure a valid floor is set, default to hgv1
-    if(S.floor!=="hgv1"&&S.floor!=="hgv0"&&S.floor!=="grn") S.floor="hgv1";
-    const floors=[{id:"hgv1",label:"Hoogeveen",sub:"1e verdieping"},{id:"hgv0",label:"Hoogeveen",sub:"Begane grond"},{id:"grn",label:"Groningen",sub:""}];
-    const ci=floors.findIndex(f=>f.id===S.floor),cf=floors[ci]||floors[0];
-    let fc="";
-    if(S.floor==="hgv1"){const ds=computeDesks(dk,dy,"hgv");const fC=Object.values(ds).filter(s=>s.status==="fixed").length,aC=Object.values(ds).filter(s=>s.status==="available"||s.status==="flex").length,rC=Object.values(ds).filter(s=>s.status==="reserved"||s.status==="mine").length;fc=`<div class="stats-bar"><div class="stat"><div class="num" style="color:var(--eco-green)">${fC}</div><div class="lbl">Bezet</div></div><div class="stat"><div class="num" style="color:var(--eco-accent)">${aC}</div><div class="lbl">Vrij</div></div><div class="stat"><div class="num" style="color:var(--eco-blue)">${rC}</div><div class="lbl">Gereserveerd</div></div></div><div class="plan-card"><h3>Plattegrond — ${fmtNL(sel)}</h3>${svgHGV(ds)}</div><div class="hint">Klik op een bureau om te reserveren of details te bekijken.</div>`;}
-    else if(S.floor==="hgv0"){const ds=computeDesks(dk,dy,"hgv_bg");const fC=Object.values(ds).filter(s=>s.status==="fixed").length,aC=Object.values(ds).filter(s=>s.status==="available"||s.status==="flex").length,rC=Object.values(ds).filter(s=>s.status==="reserved"||s.status==="mine").length;fc=`<div class="stats-bar"><div class="stat"><div class="num" style="color:var(--eco-green)">${fC}</div><div class="lbl">Bezet</div></div><div class="stat"><div class="num" style="color:var(--eco-accent)">${aC}</div><div class="lbl">Vrij</div></div><div class="stat"><div class="num" style="color:var(--eco-blue)">${rC}</div><div class="lbl">Gereserveerd</div></div></div><div class="plan-card"><h3>Plattegrond — ${fmtNL(sel)}</h3>${svgHGV_BG(ds)}</div><div class="hint">Klik op een bureau om te reserveren of details te bekijken.</div>`;}
-    else if(S.floor==="grn"){const ds=computeDesks(dk,dy,"grn");const fC=Object.values(ds).filter(s=>s.status==="fixed").length,aC=Object.values(ds).filter(s=>s.status==="available"||s.status==="flex").length,rC=Object.values(ds).filter(s=>s.status==="reserved"||s.status==="mine").length;fc=`<div class="stats-bar"><div class="stat"><div class="num" style="color:var(--eco-green)">${fC}</div><div class="lbl">Bezet</div></div><div class="stat"><div class="num" style="color:var(--eco-accent)">${aC}</div><div class="lbl">Vrij</div></div><div class="stat"><div class="num" style="color:var(--eco-blue)">${rC}</div><div class="lbl">Gereserveerd</div></div></div><div class="plan-card"><h3>Plattegrond — ${fmtNL(sel)}</h3>${svgGRN(ds)}</div><div class="hint">Klik op een bureau om te reserveren of details te bekijken.</div>`;}
-    content=`<div class="floor-nav"><button onclick="chgFloor(-1)"${ci>0?"":" disabled"}>‹</button><div class="floor-label">${cf.label}${cf.sub?`<br><span class="floor-sub">${cf.sub}</span>`:""}</div><button onclick="chgFloor(1)"${ci<floors.length-1?"":" disabled"}>›</button></div>${fc}`;
+  // Day tabs
+  const dayHtml = wd.map((d, i) =>
+    `<div class="day-tab${S.selectedDayIdx === i ? " active" : ""}${fmtDate(d) === today ? " today" : ""}" onclick="selDay(${i})"><div class="dn">${fmtNL(d).split(" ")[0]}</div><div class="dd">${d.getDate()}</div></div>`
+  ).join("");
+
+  // Nav bar (week / month depending on tab + view)
+  let navHtml;
+  if (S.tab === "admin") {
+    navHtml = "";
+  } else if (S.tab === "aanwezigheid" && S.viewMode === "maand") {
+    navHtml = `<div class="week-nav"><button onclick="chgMonth(-1)">‹</button><span>${monthLabel(S.monthOffset)}</span><button onclick="chgMonth(1)">›</button></div>`;
+  } else {
+    navHtml = `<div class="week-nav"><button onclick="chgWeek(-1)">‹</button><span>${weekLabel(S.weekOffset)}</span><button onclick="chgWeek(1)">›</button></div><div class="day-tabs">${dayHtml}</div>`;
   }
 
-  // ── ADMIN TAB ──
-  if(S.tab==="admin") {
-    if(!S.adminAuth) {
-      content=`<div class="admin-section"><div class="pw-section"><h3 style="margin-bottom:16px;text-transform:none;font-size:16px">🔒 Admin</h3><p style="color:var(--eco-muted);font-size:13px;margin-bottom:16px">Voer het wachtwoord in om instellingen te beheren.</p><input id="adminPw" type="password" placeholder="Wachtwoord" onkeydown="if(event.key==='Enter')adminLogin()"/><br><button class="btn" onclick="adminLogin()">Inloggen</button></div></div>`;
-    } else {
-      const atabs=[{id:"medewerkers",label:"👥 Medewerkers"},{id:"hgv_schema",label:"🏢 HGV 1e"},{id:"hgv_bg_schema",label:"🏢 HGV BG"},{id:"grn_schema",label:"🏢 GRN"},{id:"statussen",label:"📍 Statussen"}];
-      let adminContent="";
+  // Tab content
+  let content = "";
+  if (S.tab === "aanwezigheid") content = renderAanwezigheid(cfg, dk, dy, sel, wd, today, empNames);
+  if (S.tab === "werkplekken")  content = renderWerkplekken(cfg, dk, dy, sel);
+  if (S.tab === "admin")        content = renderAdmin(cfg, empNames);
 
-      if(S.adminTab==="medewerkers") {
-        let rows="";
-        cfg.employees.forEach((e,i)=>{
-          if(e==="|") rows+=`<div class="admin-row" style="background:var(--eco-border);height:3px;padding:0"></div>`;
-          else rows+=`<div class="admin-row"><span class="name">${e}</span><button class="btn btn-sm btn-red" onclick="admRemoveEmp(${i})">✕</button></div>`;
-        });
-        adminContent=`<div class="admin-section"><h3>Medewerkers (${empNames.length})</h3>${rows}<div style="margin-top:12px;display:flex;gap:8px"><input id="newEmp" class="admin-input" placeholder="Nieuwe medewerker" style="flex:1" onkeydown="if(event.key==='Enter')admAddEmp()"/><button class="btn btn-sm" onclick="admAddEmp()">+ Toevoegen</button></div><div style="margin-top:8px"><button class="btn btn-sm btn-ghost" onclick="admAddSep()">— Scheidingslijn toevoegen</button></div><div class="admin-info">Verwijder en voeg toe om de volgorde aan te passen. Scheidingslijnen maken groepen.</div></div>`;
-      }
-
-      if(S.adminTab==="hgv_schema") {
-        let grid=`<div class="admin-grid"><div class="lbl">Plek</div>${DAYS.map(d=>`<div class="lbl">${d}</div>`).join("")}`;
-        for(let id=1;id<=11;id++){
-          grid+=`<div class="desk-label">${id}</div>`;
-          DAYS.forEach(d=>{const v=cfg.hgv[id]?.[d]||"";grid+=`<input value="${v}" onchange="admSetDesk('hgv',${id},'${d}',this.value)"/>`;});
-        }
-        grid+=`</div>`;
-        adminContent=`<div class="admin-section"><h3>Hoogeveen 1e verdieping — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek.</div></div>`;
-      }
-
-      if(S.adminTab==="hgv_bg_schema") {
-        let grid=`<div class="admin-grid"><div class="lbl">Plek</div>${DAYS.map(d=>`<div class="lbl">${d}</div>`).join("")}`;
-        for(let id=1;id<=20;id++){
-          grid+=`<div class="desk-label">${id}</div>`;
-          DAYS.forEach(d=>{const v=cfg.hgv_bg[id]?.[d]||"";grid+=`<input value="${v}" onchange="admSetDesk('hgv_bg',${id},'${d}',this.value)"/>`;});
-        }
-        grid+=`</div>`;
-        adminContent=`<div class="admin-section"><h3>Hoogeveen Begane grond — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek. Naomi's plek is apart (niet in schema).</div></div>`;
-      }
-
-      if(S.adminTab==="grn_schema") {
-        let grid=`<div class="admin-grid"><div class="lbl">Plek</div>${DAYS.map(d=>`<div class="lbl">${d}</div>`).join("")}`;
-        for(let id=1;id<=8;id++){
-          grid+=`<div class="desk-label">G${id}</div>`;
-          DAYS.forEach(d=>{const v=cfg.grn[id]?.[d]||"";grid+=`<input value="${v}" onchange="admSetDesk('grn',${id},'${d}',this.value)"/>`;});
-        }
-        grid+=`</div>`;
-        adminContent=`<div class="admin-section"><h3>Groningen — Vast schema</h3>${grid}<div class="admin-info">Vul namen in voor vaste plekken. Laat leeg voor flexplek.</div></div>`;
-      }
-
-      if(S.adminTab==="statussen") {
-        let rows=cfg.statuses.map((s,i)=>`<div class="admin-row"><span class="name"><span class="att-chip ${s.cls} selected" style="cursor:default;font-size:11px;padding:4px 8px">${s.label}</span></span><span style="font-size:11px;color:var(--eco-muted)">${s.id}</span><button class="btn btn-sm btn-red" onclick="admRemoveStatus(${i})">✕</button></div>`).join("");
-        adminContent=`<div class="admin-section"><h3>Statussen / Vestigingen</h3>${rows}<div style="margin-top:12px;display:flex;gap:8px"><input id="newStatId" class="admin-input" placeholder="id (bijv. utrecht)" style="flex:1" /><input id="newStatLabel" class="admin-input" placeholder="Label (bijv. Utrecht)" style="flex:1" /><button class="btn btn-sm" onclick="admAddStatus()">+</button></div><div class="admin-info">ID moet uniek zijn (kleine letters, geen spaties). Label is wat gebruikers zien.</div></div>`;
-      }
-
-      content=`<div class="admin-tabs">${atabs.map(t=>`<div class="admin-tab${S.adminTab===t.id?" active":""}" onclick="S.adminTab='${t.id}';render()">${t.label}</div>`).join("")}</div>${adminContent}<div style="margin-top:12px;text-align:center"><button class="btn btn-sm btn-ghost" onclick="syncAfas()" style="margin-right:8px">↕ Sync AFAS</button><button class="btn btn-sm btn-ghost" onclick="admReset()" style="margin-right:8px">🔄 Reset naar standaard</button><button class="btn btn-sm btn-ghost" onclick="S.adminAuth=false;render()">🔒 Uitloggen</button></div>`;
-    }
-  }
-
-  // Modal
-  let modalHtml="";
-  if(S.modal){const m=S.modal,s=m.state,dl=m.dateLabel,lb=m.label||m.deskId,pf=m.pfx||"";let mc="";
-    if(s.status==="fixed")mc=`<h3>Plek ${lb} — ${s.fixedPerson}</h3><p>Vaste werkplek op ${dl}.<br>Is ${s.fixedPerson.split(" ")[0]} afwezig?</p><div class="modal-actions"><button class="modal-btn orange" onclick="markAbsent(${m.deskId},'${m.dateKey}','${pf}')">🏠 Afmelden</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
-    else if(s.status==="available")mc=`<h3>Plek ${lb} — beschikbaar</h3><p>Vrij op ${dl}.</p><div class="modal-actions"><button class="modal-btn green" onclick="reserveDesk(${m.deskId},'${m.dateKey}','${pf}')">📌 Reserveren</button><button class="modal-btn ghost" onclick="unmarkAbsent(${m.deskId},'${m.dateKey}','${pf}')">Afmelding ongedaan</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
-    else if(s.status==="flex")mc=`<h3>Plek ${lb} — flexplek</h3><p>Vrij te reserveren op ${dl}.</p><div class="modal-actions"><button class="modal-btn green" onclick="reserveDesk(${m.deskId},'${m.dateKey}','${pf}')">📌 Reserveren</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
-    else if(s.status==="mine")mc=`<h3>Plek ${lb} — jouw reservering</h3><p>Gereserveerd op ${dl}.</p><div class="modal-actions"><button class="modal-btn red" onclick="cancelRes(${m.deskId},'${m.dateKey}','${pf}')">Annuleren</button><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
-    else if(s.status==="reserved")mc=`<h3>Plek ${lb} — gereserveerd</h3><p>Door <strong>${s.reservedBy}</strong> op ${dl}.</p><div class="modal-actions"><button class="modal-btn ghost" onclick="closeModal()">Sluiten</button></div>`;
-    modalHtml=`<div class="overlay" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${mc}</div></div>`;
-  }
-
-  document.getElementById("app").innerHTML=`
+  document.getElementById("app").innerHTML = `
     <div class="header"><div class="header-icon">🌿</div><div><h1>Eco Reest</h1><p>Aanwezigheid & Werkplekken</p></div></div>
     ${userHtml}
     <div class="main-tabs">
-      <div class="main-tab${S.tab==="aanwezigheid"?" active":""}" onclick="setTab('aanwezigheid')">📋 Aanwezigheid</div>
-      <div class="main-tab${S.tab==="werkplekken"?" active":""}" onclick="setTab('werkplekken')">🗺️ Werkplekken</div>
-      <div class="main-tab${S.tab==="admin"?" active":""}" onclick="setTab('admin')">⚙️</div>
+      <div class="main-tab${S.tab === "aanwezigheid" ? " active" : ""}" onclick="setTab('aanwezigheid')">📋 Aanwezigheid</div>
+      <div class="main-tab${S.tab === "werkplekken"  ? " active" : ""}" onclick="setTab('werkplekken')">🗺️ Werkplekken</div>
+      <div class="main-tab${S.tab === "admin"        ? " active" : ""}" onclick="setTab('admin')">⚙️</div>
     </div>
-    ${S.tab!=="admin"?`<div class="week-nav"><button onclick="chgWeek(-1)">‹</button><span>${wl}</span><button onclick="chgWeek(1)">›</button></div><div class="day-tabs">${dayHtml}</div>`:""}
-    ${content}${modalHtml}
-    ${S.toast?`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`:""}`;
+    ${navHtml}
+    ${content}${renderModal()}
+    ${S.toast ? `<div class="toast ${S.toast.type}">${S.toast.msg}</div>` : ""}`;
 }
 
 // ── Handlers ──
-window.saveName=()=>{const v=document.getElementById("ni")?.value?.trim();if(!v)return;S.userName=v;localStorage.setItem("ecoreest-username",v);render();};
-window.clearName=()=>{S.userName="";localStorage.removeItem("ecoreest-username");render();};
-window.setTab=t=>{S.tab=t;render();};
-window.chgWeek=d=>{S.weekOffset+=d;S.selectedDayIdx=0;render();};
-window.selDay=i=>{S.selectedDayIdx=i;render();};
-window.setPeriod=p=>{S.period=p;render();};
-window.chgFloor=dir=>{const f=["hgv1","hgv0","grn"],i=f.indexOf(S.floor),n=i+dir;if(n>=0&&n<f.length){S.floor=f[n];render();}};
-
-window.setMyStatus=(dk,status)=>{
-  const cur=getAtt(dk,S.userName,S.period);
-  if(cur===status){setAtt(dk,S.userName,null,S.period);toast("Status gewist","info");render();}
-  else{setAtt(dk,S.userName,status,S.period);
-    if(OFFICE_STATUSES.includes(status)){
-      if(DESK_LOCATIONS.includes(status)){const wd2=weekDates(S.weekOffset),sel2=wd2[S.selectedDayIdx],dy2=dKey(sel2),fd=hasFixedDesk(S.userName,dy2,status);
-        if(fd){toast(`${getCfg().statuses.find(s=>s.id===status)?.label} — vaste plek ${fd} ✓`);}
-        else{S.floor=status==="groningen"?"grn":"hgv1";toast(`${getCfg().statuses.find(s=>s.id===status)?.label} — kies je werkplek`);S.tab="werkplekken";}
-      } else toast(`Status: ${getCfg().statuses.find(s=>s.id===status)?.label} ✓`);
-    } else toast(`Status: ${getCfg().statuses.find(s=>s.id===status)?.label}`);
-    render();}
+window.saveName = () => {
+  const v = document.getElementById("ni")?.value?.trim();
+  if (!v) return;
+  S.userName = v;
+  localStorage.setItem("ecoreest-username", v);
+  render();
 };
-window.saveNote=dk=>{setAttNote(dk,S.userName,(document.getElementById("noteInput")?.value||"").trim());toast("Opmerking opgeslagen");render();};
 
-window.deskClick=(id,loc)=>{if(!S.userName){toast("Vul eerst je naam in!","warn");return;}const wd2=weekDates(S.weekOffset),sel=wd2[S.selectedDayIdx],dk2=fmtDate(sel),dy2=dKey(sel);const location=loc||(S.floor==="grn"?"grn":S.floor==="hgv0"?"hgv_bg":"hgv");const ds=computeDesks(dk2,dy2,location);const pfx=location==="grn"?"grn_":location==="hgv_bg"?"hgvbg_":"";const label=location==="grn"?`G${id}`:id;S.modal={deskId:id,state:ds[id],dateKey:dk2,dateLabel:fmtNL(sel),pfx,label,location};render();};
-window.markAbsent=(id,dk,pfx)=>{const k=pfx+dk;if(!S.desk.absences[k])S.desk.absences[k]={};S.desk.absences[k][id]=true;save();S.modal=null;toast("Plek vrijgemeld");render();};
-window.unmarkAbsent=(id,dk,pfx)=>{const k=pfx+dk;if(S.desk.absences[k])delete S.desk.absences[k][id];if(S.desk.reservations[k])delete S.desk.reservations[k][id];save();S.modal=null;toast("Ongedaan gemaakt","info");render();};
-window.reserveDesk=(id,dk,pfx)=>{
+window.clearName = () => {
+  S.userName = "";
+  localStorage.removeItem("ecoreest-username");
+  render();
+};
+
+window.setTab = t => {
+  S.tab = t;
+  render();
+};
+
+window.chgWeek = d => {
+  S.weekOffset += d;
+  S.selectedDayIdx = 0;
+  render();
+};
+
+window.selDay = i => {
+  S.selectedDayIdx = i;
+  render();
+};
+
+window.setPeriod = p => {
+  S.period = p;
+  render();
+};
+
+window.chgFloor = dir => {
+  const ids = FLOORS.map(f => f.id);
+  const i   = ids.indexOf(S.floor);
+  const n   = i + dir;
+  if (n >= 0 && n < ids.length) {
+    S.floor = ids[n];
+    render();
+  }
+};
+
+window.setMyStatus = (dk, status) => {
+  const cur = getAtt(dk, S.userName, S.period);
+  if (cur === status) {
+    setAtt(dk, S.userName, null, S.period);
+    toast("Status gewist", "info");
+    render();
+  } else {
+    setAtt(dk, S.userName, status, S.period);
+    if (OFFICE_STATUSES.includes(status)) {
+      if (DESK_LOCATIONS.includes(status)) {
+        const wd2 = weekDates(S.weekOffset);
+        const sel2 = wd2[S.selectedDayIdx];
+        const dy2  = dKey(sel2);
+        const fd   = hasFixedDesk(S.userName, dy2, status);
+        if (fd) {
+          toast(`${getCfg().statuses.find(s => s.id === status)?.label} — vaste plek ${fd} ✓`);
+        } else {
+          S.floor = status === "groningen" ? "grn" : "hgv1";
+          toast(`${getCfg().statuses.find(s => s.id === status)?.label} — kies je werkplek`);
+          S.tab = "werkplekken";
+        }
+      } else {
+        toast(`Status: ${getCfg().statuses.find(s => s.id === status)?.label} ✓`);
+      }
+    } else {
+      toast(`Status: ${getCfg().statuses.find(s => s.id === status)?.label}`);
+    }
+    render();
+  }
+};
+
+window.saveNote = dk => {
+  setAttNote(dk, S.userName, (document.getElementById("noteInput")?.value || "").trim());
+  toast("Opmerking opgeslagen");
+  render();
+};
+
+window.deskClick = (id, loc) => {
+  if (!S.userName) { toast("Vul eerst je naam in!", "warn"); return; }
+  const wd2      = weekDates(S.weekOffset);
+  const sel      = wd2[S.selectedDayIdx];
+  const dk2      = fmtDate(sel);
+  const dy2      = dKey(sel);
+  const location = loc || (S.floor === "grn" ? "grn" : S.floor === "hgv0" ? "hgv_bg" : "hgv");
+  const ds       = computeDesks(dk2, dy2, location);
+  const pfx      = location === "grn" ? "grn_" : location === "hgv_bg" ? "hgvbg_" : "";
+  const label    = location === "grn" ? `G${id}` : id;
+  S.modal = { deskId: id, state: ds[id], dateKey: dk2, dateLabel: fmtNL(sel), pfx, label, location };
+  render();
+};
+
+window.markAbsent = (id, dk, pfx) => {
+  const k = pfx + dk;
+  if (!S.desk.absences[k]) S.desk.absences[k] = {};
+  S.desk.absences[k][id] = true;
+  save();
+  S.modal = null;
+  toast("Plek vrijgemeld");
+  render();
+};
+
+window.unmarkAbsent = (id, dk, pfx) => {
+  const k = pfx + dk;
+  if (S.desk.absences[k])     delete S.desk.absences[k][id];
+  if (S.desk.reservations[k]) delete S.desk.reservations[k][id];
+  save();
+  S.modal = null;
+  toast("Ongedaan gemaakt", "info");
+  render();
+};
+
+window.reserveDesk = (id, dk, pfx) => {
   // Check if user has a fixed desk anywhere on this day — if so, block
-  const wd2=weekDates(S.weekOffset),sel=wd2[S.selectedDayIdx],dy2=dKey(sel);
-  const fd=hasFixedDesk(S.userName,dy2,null,dk);
-  if(fd){toast(`Je hebt al vaste plek ${fd} vandaag`,"warn");S.modal=null;render();return;}
+  const wd2  = weekDates(S.weekOffset);
+  const sel  = wd2[S.selectedDayIdx];
+  const dy2  = dKey(sel);
+  const fd   = hasFixedDesk(S.userName, dy2, null, dk);
+  if (fd) {
+    toast(`Je hebt al vaste plek ${fd} vandaag`, "warn");
+    S.modal = null;
+    render();
+    return;
+  }
   // Check if user already has a reservation on this day (any location) and remove it
   const prefixes = ["", "grn_", "hgvbg_"];
   for (const p of prefixes) {
-    const key = p+dk;
+    const key    = p + dk;
     const dayRes = S.desk.reservations[key];
     if (dayRes) {
       const toDelete = [];
@@ -684,48 +1090,160 @@ window.reserveDesk=(id,dk,pfx)=>{
       if (Object.keys(dayRes).length === 0) delete S.desk.reservations[key];
     }
   }
-  const k=pfx+dk;
-  if(!S.desk.reservations[k])S.desk.reservations[k]={};
-  S.desk.reservations[k][String(id)]=S.userName;
+  const k = pfx + dk;
+  if (!S.desk.reservations[k]) S.desk.reservations[k] = {};
+  S.desk.reservations[k][String(id)] = S.userName;
   // Auto-update attendance to match the location of the reserved desk
-  const newStatus = pfx==="grn_"?"groningen":"hoogeveen";
-  setAtt(dk,S.userName,newStatus,"hele_dag");
-  save();S.modal=null;toast("Plek gereserveerd!");render();
+  const newStatus = pfx === "grn_" ? "groningen" : "hoogeveen";
+  setAtt(dk, S.userName, newStatus, "hele_dag");
+  save();
+  S.modal = null;
+  toast("Plek gereserveerd!");
+  render();
 };
-window.cancelRes=(id,dk,pfx)=>{const k=pfx+dk;if(S.desk.reservations[k])delete S.desk.reservations[k][id];save();S.modal=null;toast("Geannuleerd","info");render();};
-window.closeModal=()=>{S.modal=null;render();};
+
+window.cancelRes = (id, dk, pfx) => {
+  const k = pfx + dk;
+  if (S.desk.reservations[k]) delete S.desk.reservations[k][id];
+  save();
+  S.modal = null;
+  toast("Geannuleerd", "info");
+  render();
+};
+
+window.closeModal = () => {
+  S.modal = null;
+  render();
+};
 
 // ── Admin handlers ──
-window.adminLogin=()=>{const pw=document.getElementById("adminPw")?.value;if(pw===ADMIN_PW){S.adminAuth=true;toast("Admin ingelogd");render();}else toast("Onjuist wachtwoord","warn");};
+window.adminLogin = () => {
+  const pw = document.getElementById("adminPw")?.value;
+  if (pw === ADMIN_PW) {
+    S.adminAuth = true;
+    toast("Admin ingelogd");
+    render();
+  } else {
+    toast("Onjuist wachtwoord", "warn");
+  }
+};
 
-window.admAddEmp=()=>{const v=document.getElementById("newEmp")?.value?.trim();if(!v)return;const cfg=getCfg();cfg.employees.push(v);saveConfig(cfg);toast(`${v} toegevoegd`);render();};
-window.admRemoveEmp=i=>{const cfg=getCfg();const name=cfg.employees[i];cfg.employees.splice(i,1);saveConfig(cfg);toast(`${name} verwijderd`,"info");render();};
-window.admAddSep=()=>{const cfg=getCfg();cfg.employees.push("|");saveConfig(cfg);toast("Scheidingslijn toegevoegd");render();};
+window.admAddEmp = () => {
+  const v = document.getElementById("newEmp")?.value?.trim();
+  if (!v) return;
+  const cfg = getCfg();
+  cfg.employees.push(v);
+  saveConfig(cfg);
+  toast(`${v} toegevoegd`);
+  render();
+};
 
-window.admSetDesk=(loc,id,day,val)=>{const cfg=getCfg();const schedule=loc==="grn"?cfg.grn:loc==="hgv_bg"?cfg.hgv_bg:cfg.hgv;if(!schedule[id])schedule[id]={};schedule[id][day]=val.trim()||null;if(loc==="grn")cfg.grn=schedule;else if(loc==="hgv_bg")cfg.hgv_bg=schedule;else cfg.hgv=schedule;saveConfig(cfg);};
+window.admRemoveEmp = i => {
+  const cfg  = getCfg();
+  const name = cfg.employees[i];
+  cfg.employees.splice(i, 1);
+  saveConfig(cfg);
+  toast(`${name} verwijderd`, "info");
+  render();
+};
 
-window.admAddStatus=()=>{const id=document.getElementById("newStatId")?.value?.trim().toLowerCase();const label=document.getElementById("newStatLabel")?.value?.trim();if(!id||!label)return;const cfg=getCfg();if(cfg.statuses.find(s=>s.id===id)){toast("ID bestaat al","warn");return;}cfg.statuses.push({id,label,cls:id});saveConfig(cfg);toast(`${label} toegevoegd`);render();};
-window.admRemoveStatus=i=>{const cfg=getCfg();const s=cfg.statuses[i];cfg.statuses.splice(i,1);saveConfig(cfg);toast(`${s.label} verwijderd`,"info");render();};
+window.admAddSep = () => {
+  const cfg = getCfg();
+  cfg.employees.push("|");
+  saveConfig(cfg);
+  toast("Scheidingslijn toegevoegd");
+  render();
+};
 
-window.admReset=()=>{if(confirm("Alle admin-instellingen terugzetten naar standaard? Aanwezigheid en reserveringen blijven behouden.")){fetch('/api/reset-config',{method:'POST'}).then(()=>{S.adminCfg=null;toast("Reset naar standaard");render();}).catch(()=>toast("Reset mislukt","warn"));}};
-window.syncAfas=async()=>{
-  toast("AFAS synchroniseren...","info");
+window.admSetDesk = (loc, id, day, val) => {
+  const cfg      = getCfg();
+  const schedule = loc === "grn" ? cfg.grn : loc === "hgv_bg" ? cfg.hgv_bg : cfg.hgv;
+  if (!schedule[id]) schedule[id] = {};
+  schedule[id][day] = val.trim() || null;
+  if (loc === "grn")    cfg.grn    = schedule;
+  else if (loc === "hgv_bg") cfg.hgv_bg = schedule;
+  else                  cfg.hgv    = schedule;
+  saveConfig(cfg);
+};
+
+window.admAddStatus = () => {
+  const id    = document.getElementById("newStatId")?.value?.trim().toLowerCase();
+  const label = document.getElementById("newStatLabel")?.value?.trim();
+  if (!id || !label) return;
+  const cfg = getCfg();
+  if (cfg.statuses.find(s => s.id === id)) { toast("ID bestaat al", "warn"); return; }
+  cfg.statuses.push({ id, label, cls: id });
+  saveConfig(cfg);
+  toast(`${label} toegevoegd`);
+  render();
+};
+
+window.admRemoveStatus = i => {
+  const cfg = getCfg();
+  const s   = cfg.statuses[i];
+  cfg.statuses.splice(i, 1);
+  saveConfig(cfg);
+  toast(`${s.label} verwijderd`, "info");
+  render();
+};
+
+window.admReset = () => {
+  if (confirm("Alle admin-instellingen terugzetten naar standaard? Aanwezigheid en reserveringen blijven behouden.")) {
+    fetch('/api/reset-config', { method: 'POST' })
+      .then(() => { S.adminCfg = null; toast("Reset naar standaard"); render(); })
+      .catch(() => toast("Reset mislukt", "warn"));
+  }
+};
+
+window.syncAfas = async () => {
+  toast("AFAS synchroniseren...", "info");
   try {
-    const r=await fetch('/api/sync-afas',{method:'POST'});
-    const d=await r.json();
-    if(d.ok){
+    const r = await fetch('/api/sync-afas', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
       toast(`Sync klaar — ${d.employees_synced} medewerkers, ${d.absences_added} vrije dagen ingevuld`);
-      const resp=await fetch('/api/data');
-      if(resp.ok){const data=await resp.json();S.attendance=data.attendance||{};S.desk=data.desk||{absences:{},reservations:{}};S.adminCfg=data.adminCfg||null;}
+      const resp = await fetch('/api/data');
+      if (resp.ok) {
+        const data = await resp.json();
+        S.attendance = data.attendance || {};
+        S.desk       = data.desk       || { absences: {}, reservations: {} };
+        S.adminCfg   = data.adminCfg   || null;
+      }
       render();
     } else {
-      toast(`Sync mislukt: ${d.error}`,"warn");
+      toast(`Sync mislukt: ${d.error}`, "warn");
     }
-  } catch(e){toast("Sync mislukt","warn");}
+  } catch (e) {
+    toast("Sync mislukt", "warn");
+  }
+};
+
+window.setViewMode = m => {
+  S.viewMode = m;
+  render();
+};
+
+window.chgMonth = d => {
+  S.monthOffset += d;
+  render();
+};
+
+window.selectDate = dk => {
+  const d      = new Date(dk);
+  const today  = new Date();
+  const todayMon = new Date(today);
+  todayMon.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const selMon = new Date(d);
+  selMon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const diff = Math.round((selMon - todayMon) / 86400000);
+  S.weekOffset      = Math.round(diff / 7);
+  S.selectedDayIdx  = d.getDay() - 1;
+  render();
+  setTimeout(() => document.querySelector('.att-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 };
 
 // Start de app — laad data van de server
-if(S.selectedDayIdx<0)S.selectedDayIdx=0;
+if (S.selectedDayIdx < 0) S.selectedDayIdx = 0;
 initApp();
 </script>
 </body>
