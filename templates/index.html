@@ -160,9 +160,19 @@ body { font-family: 'DM Sans', sans-serif; background: var(--eco-bg); color: var
 .month-cell.selected { background: var(--eco-green-light); outline: 2px solid var(--eco-green); }
 .month-date { font-size: 11px; font-weight: 700; color: var(--eco-muted); margin-bottom: 2px; }
 .month-date.today { color: white; background: var(--eco-accent); border-radius: 10px; padding: 0 4px; display: inline-block; }
+/* WCAG focus ring — visible on all custom interactive elements */
+:focus-visible { outline: 3px solid var(--eco-green); outline-offset: 2px; border-radius: 4px; }
+/* Re-suppress on text inputs — they use border-colour for focus indication */
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+/* Screen-reader only utility */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+/* Keyboard shortcut badges */
+.kbd { display: inline-block; background: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; padding: 0 3px; font-size: 10px; font-family: monospace; line-height: 1.6; vertical-align: middle; }
+.kbd-bar { font-size: 10px; color: var(--eco-muted); margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 </style>
 </head>
 <body>
+<div id="sr-live" aria-live="polite" aria-atomic="true" class="sr-only"></div>
 <div class="app" id="app"></div>
 
 <script>
@@ -296,6 +306,7 @@ let S = {
   tab:            "aanwezigheid",
   weekOffset:     0,
   selectedDayIdx: Math.max(0, Math.min(4, new Date().getDay() - 1)),
+  selectedDays:   [],
   period:         "hele_dag",
   floor:          "hgv1",
   viewMode:       "week",
@@ -307,6 +318,7 @@ let S = {
   toast:          null,
   adminAuth:      false,
   adminTab:       "medewerkers",
+  anchorDay:      null,
 };
 
 // ── Helpers ──
@@ -372,6 +384,8 @@ function save() {
 
 function toast(msg, type = "success") {
   S.toast = { msg, type };
+  const lv = document.getElementById('sr-live');
+  if (lv) lv.textContent = msg;
   render();
   setTimeout(() => { S.toast = null; render(); }, 2500);
 }
@@ -392,6 +406,7 @@ async function initApp() {
     console.error('Laden mislukt, lokaal verder:', e);
   }
   if (S.selectedDayIdx < 0) S.selectedDayIdx = 0;
+  if (!S.selectedDays.length) S.selectedDays = [fmtDate(weekDates(0)[S.selectedDayIdx])];
   render();
 }
 
@@ -520,7 +535,7 @@ function wBadge(dk, name) {
   if (!e.status) return `<span class="week-badge wb-none">—</span>`;
   const st       = cfg.statuses.find(s => s.id === e.status);
   const noteHtml = n
-    ? `<div style="font-size:8px;color:#999;font-style:italic;line-height:1.1;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 auto;cursor:pointer" onclick="toast('${name}: ${n.replace(/'/g, "\\'")}','info')">${n}</div>`
+    ? `<div style="font-size:8px;color:#999;font-style:italic;line-height:1.1;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 auto;cursor:pointer" onclick="event.stopPropagation();toast('${name}: ${n.replace(/'/g, "\\'")}','info')">${n}</div>`
     : "";
   if (e.am && e.pm && e.am !== e.pm) {
     const amCls = cfg.statuses.find(s => s.id === e.am)?.cls || "none";
@@ -574,22 +589,42 @@ function renderFloor(dk, dy, sel, loc, svgFn) {
 
 // ── Week overview table (aanwezigheid) ──
 function renderWeekOverview(cfg, wd, dk) {
+  const weekDks = wd.map(d => fmtDate(d));
+  const selSet  = new Set(S.selectedDays);
+
+  // Put the current user at the top of the list, then everyone else
+  const rest = cfg.employees.filter(e => e !== S.userName);
+  const displayList = S.userName && cfg.employees.includes(S.userName)
+    ? [S.userName, ...rest]
+    : cfg.employees;
+
   let teamRows = "";
-  for (const entry of cfg.employees) {
+  for (const entry of displayList) {
     if (entry === "|") {
       teamRows += `<tr class="team-sep"><td colspan="6"></td></tr>`;
       continue;
     }
     const isMe = entry === S.userName;
     let cells = `<td>${entry}${isMe ? ' 👤' : ''}</td>`;
-    for (let i = 0; i < 5; i++) cells += `<td>${wBadge(fmtDate(wd[i]), entry)}</td>`;
+    for (let i = 0; i < 5; i++) {
+      const isSel = selSet.has(weekDks[i]);
+      const lbl   = `${['Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag'][i]} ${wd[i].getDate()} — ${entry}`;
+      cells += `<td style="cursor:pointer${isSel ? ';background:var(--eco-green-light)' : ''}" aria-selected="${isSel}" aria-label="${lbl}" onclick="selWeekDay(${i},event)">${wBadge(weekDks[i], entry)}</td>`;
+    }
     teamRows += `<tr${isMe ? ' class="me"' : ''}>${cells}</tr>`;
   }
+
+  const allWeekSel = weekDks.every(d => selSet.has(d));
+  const noSel      = weekDks.every(d => !selSet.has(d));
+  const selAllTitle = allWeekSel ? 'Deselecteer week' : 'Selecteer hele week';
+  const selAllTh = `<th role="button" tabindex="0" style="cursor:pointer;color:${allWeekSel ? 'var(--eco-green-dark)' : 'var(--eco-muted)'};font-size:14px" aria-label="${selAllTitle}" aria-pressed="${allWeekSel}" onclick="selWeekAll()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selWeekAll()}">☑</th>`;
   const headers = ["ma","di","wo","do","vr"].map((d, i) => {
-    const dt = wd[i];
-    return `<th${S.selectedDayIdx === i ? ' style="color:var(--eco-green-dark)"' : ''}>${d}<br><span style="font-weight:400;font-size:9px">${dt.getDate()}</span></th>`;
+    const isSel   = selSet.has(weekDks[i]);
+    const dayName = ['Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag'][i];
+    return `<th scope="col" class="week-day-th" data-col="${i}" role="columnheader" tabindex="0" style="cursor:pointer;${isSel ? 'color:var(--eco-green-dark);background:var(--eco-green-light);border-radius:6px' : ''}" aria-selected="${isSel}" aria-label="${dayName} ${wd[i].getDate()} — klik om te selecteren" onclick="selWeekDay(${i},event)" onkeydown="weekDayThKey(event,${i})">${d}<br><span style="font-weight:400;font-size:9px">${wd[i].getDate()}</span></th>`;
   }).join("");
-  return `<div class="att-card"><h3>Weekoverzicht</h3><div class="team-list"><table class="team-table"><thead><tr><th></th>${headers}</tr></thead><tbody>${teamRows}</tbody></table></div></div>`;
+  const hint = `<div class="kbd-bar" aria-label="Toetsenbordsnelkoppelingen"><span>Selecteer:</span><kbd class="kbd">1–5</kbd> dag &nbsp;|&nbsp; <kbd class="kbd">Ctrl+A</kbd> week &nbsp;|&nbsp; <kbd class="kbd">Esc</kbd> wissen</div>`;
+  return `<div class="att-card"><h3>Weekoverzicht</h3><div class="team-list"><table class="team-table" role="grid" aria-label="Weekoverzicht aanwezigheid"><thead><tr>${selAllTh}${headers}</tr></thead><tbody>${teamRows}</tbody></table></div>${hint}</div>`;
 }
 
 // ── Month calendar table (aanwezigheid) ──
@@ -611,12 +646,14 @@ function renderMonthOverview(dk, today) {
       const dk2        = fmtDate(d);
       const isToday    = dk2 === today2;
       const cell       = S.userName ? wBadge(dk2, S.userName) : `<span style="font-size:10px;color:#ddd">—</span>`;
-      const isSelected = dk2 === dk;
-      mRows += `<td class="month-cell${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}" onclick="selectDate('${dk2}')"><div class="month-date${isToday ? ' today' : ''}">${d.getDate()}</div>${cell}</td>`;
+      const isSelected = S.selectedDays.includes(dk2);
+      const dayName2   = ['Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag'][d.getDay()-1];
+      mRows += `<td class="month-cell${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}" tabindex="0" role="gridcell" aria-selected="${isSelected}" aria-label="${dayName2} ${d.getDate()} — ${isSelected ? 'geselecteerd' : 'klik om te selecteren'}" onclick="toggleDate('${dk2}',event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDate('${dk2}',event)}"><div class="month-date${isToday ? ' today' : ''}">${d.getDate()}</div>${cell}</td>`;
     }
     mRows += '</tr>';
   }
-  return `<div class="att-card"><h3>Maandoverzicht — ${monthLabel(S.monthOffset)}${S.userName ? ` — ${S.userName}` : ''}</h3><div class="team-list"><table class="team-table"><thead><tr><th></th><th>ma</th><th>di</th><th>wo</th><th>do</th><th>vr</th></tr></thead><tbody>${mRows}</tbody></table></div></div><div class="hint">Klik op een dag om de status te bekijken of aan te passen.</div>`;
+  const mhint = `<div class="kbd-bar"><span>Selecteer:</span> <kbd class="kbd">Klik</kbd> exclusief &nbsp;|&nbsp; <kbd class="kbd">Ctrl+klik</kbd> toevoegen &nbsp;|&nbsp; <kbd class="kbd">Shift+klik</kbd> reeks &nbsp;|&nbsp; <kbd class="kbd">Esc</kbd> wissen</div>`;
+  return `<div class="att-card"><h3>Maandoverzicht — ${monthLabel(S.monthOffset)}${S.userName ? ` — ${S.userName}` : ''}</h3><div class="team-list"><table class="team-table" role="grid" aria-label="Maandoverzicht aanwezigheid"><thead><tr><th scope="col"></th><th scope="col">ma</th><th scope="col">di</th><th scope="col">wo</th><th scope="col">do</th><th scope="col">vr</th></tr></thead><tbody>${mRows}</tbody></table></div>${mhint}</div>`;
 }
 
 // ── Admin desk grid (eliminates repetition for hgv / hgv_bg / grn) ──
@@ -804,13 +841,18 @@ function renderModal() {
 
 // ── Tab renderers ──
 function renderAanwezigheid(cfg, dk, dy, sel, wd, today, empNames) {
-  const myStatus  = getAtt(dk, S.userName, S.period);
-  const myNote    = getAttNote(dk, S.userName);
-  const chipHtml  = cfg.statuses.map(s =>
-    `<div class="att-chip ${s.cls}${myStatus === s.id ? " selected" : ""}" onclick="setMyStatus('${dk}','${s.id}')">${s.label}</div>`
+  // selectedDays are ISO date strings; primary = last selected (fallback to current week primary)
+  const selDks    = S.selectedDays.length > 0 ? S.selectedDays : [dk];
+  const primaryDk = selDks[selDks.length - 1];
+  const primarySel = new Date(primaryDk + 'T12:00:00');
+
+  const chipSelected = id => S.userName && selDks.every(d => getAtt(d, S.userName, S.period) === id);
+  const myNote   = getAttNote(primaryDk, S.userName);
+  const chipHtml = cfg.statuses.map(s =>
+    `<div class="att-chip ${s.cls}${chipSelected(s.id) ? " selected" : ""}" role="button" tabindex="0" aria-pressed="${chipSelected(s.id)}" onclick="setMyStatus('${s.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setMyStatus('${s.id}')}">${s.label}</div>`
   ).join("");
 
-  const { kantoor, thuis, veld, vrij } = countAttendance(dk, empNames);
+  const { kantoor, thuis, veld, vrij } = countAttendance(primaryDk, empNames);
   const statsHtml = renderStatsBar([
     { num: kantoor, lbl: "Kantoor", color: "var(--eco-green)"  },
     { num: thuis,   lbl: "Thuis",   color: "var(--eco-blue)"   },
@@ -824,12 +866,20 @@ function renderAanwezigheid(cfg, dk, dy, sel, wd, today, empNames) {
     ? renderWeekOverview(cfg, wd, dk)
     : renderMonthOverview(dk, today);
 
+  const cardTitle = selDks.length > 1
+    ? `${selDks.length} dagen geselecteerd`
+    : fmtNL(primarySel);
+
   const noteSection = S.userName
-    ? `<div class="att-note"><input id="noteInput" placeholder="Opmerking (bijv. 'tot 14:00')" value="${myNote}" onkeydown="if(event.key==='Enter')saveNote('${dk}')"/><button onclick="saveNote('${dk}')">Opslaan</button></div>`
+    ? `<div class="att-note"><input id="noteInput" placeholder="Opmerking (bijv. 'tot 14:00')" value="${myNote}" onkeydown="if(event.key==='Enter')saveNote('${primaryDk}')"/><button onclick="saveNote('${primaryDk}')">Opslaan</button></div>`
+    : "";
+
+  const statusHint = S.userName && selDks.length > 0
+    ? `<div class="kbd-bar"><span>Snelkoppelingen:</span> <kbd class="kbd">H</kbd>&nbsp;HGV &nbsp;<kbd class="kbd">G</kbd>&nbsp;GRN &nbsp;<kbd class="kbd">T</kbd>&nbsp;Thuis &nbsp;<kbd class="kbd">F</kbd>&nbsp;Veld &nbsp;<kbd class="kbd">V</kbd>&nbsp;Vrij &nbsp;<kbd class="kbd">Z</kbd>&nbsp;Ziek</div>`
     : "";
 
   return `${statsHtml}
-    <div class="att-card"><h3>Jouw status — ${fmtNL(sel)}</h3><div class="period-toggle"><div class="period-btn${S.period === "hele_dag" ? " active" : ""}" onclick="setPeriod('hele_dag')">Hele dag</div><div class="period-btn${S.period === "ochtend" ? " active" : ""}" onclick="setPeriod('ochtend')">Ochtend</div><div class="period-btn${S.period === "middag" ? " active" : ""}" onclick="setPeriod('middag')">Middag</div></div><div class="att-my"><div class="att-my-row">${S.userName ? chipHtml : '<span style="color:#aaa;font-size:13px">Vul eerst je naam in</span>'}</div>${noteSection}</div></div>
+    <div class="att-card" role="region" aria-label="Jouw aanwezigheidsstatus"><h3>Jouw status — ${cardTitle}</h3><div class="period-toggle" role="group" aria-label="Periode"><div class="period-btn${S.period === "hele_dag" ? " active" : ""}" role="button" tabindex="0" aria-pressed="${S.period === "hele_dag"}" onclick="setPeriod('hele_dag')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setPeriod('hele_dag')}">Hele dag</div><div class="period-btn${S.period === "ochtend" ? " active" : ""}" role="button" tabindex="0" aria-pressed="${S.period === "ochtend"}" onclick="setPeriod('ochtend')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setPeriod('ochtend')}">Ochtend</div><div class="period-btn${S.period === "middag" ? " active" : ""}" role="button" tabindex="0" aria-pressed="${S.period === "middag"}" onclick="setPeriod('middag')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setPeriod('middag')}">Middag</div></div><div class="att-my" role="group" aria-label="Status kiezen"><div class="att-my-row">${S.userName ? chipHtml : '<span style="color:#aaa;font-size:13px">Vul eerst je naam in</span>'}</div>${noteSection}</div></div>${statusHint}
     ${filterBar}${overviewHtml}`;
 }
 
@@ -913,19 +963,14 @@ function render() {
     userHtml = `<div class="user-row"><div class="user-pill">👤 ${S.userName}</div><button class="link-btn" onclick="clearName()">wijzig</button></div>`;
   }
 
-  // Day tabs
-  const dayHtml = wd.map((d, i) =>
-    `<div class="day-tab${S.selectedDayIdx === i ? " active" : ""}${fmtDate(d) === today ? " today" : ""}" onclick="selDay(${i})"><div class="dn">${fmtNL(d).split(" ")[0]}</div><div class="dd">${d.getDate()}</div></div>`
-  ).join("");
-
   // Nav bar (week / month depending on tab + view)
   let navHtml;
   if (S.tab === "admin") {
     navHtml = "";
   } else if (S.tab === "aanwezigheid" && S.viewMode === "maand") {
-    navHtml = `<div class="week-nav"><button onclick="chgMonth(-1)">‹</button><span>${monthLabel(S.monthOffset)}</span><button onclick="chgMonth(1)">›</button></div>`;
+    navHtml = `<div class="week-nav"><button aria-label="Vorige maand" onclick="chgMonth(-1)">‹</button><span>${monthLabel(S.monthOffset)}</span><button aria-label="Volgende maand" onclick="chgMonth(1)">›</button></div>`;
   } else {
-    navHtml = `<div class="week-nav"><button onclick="chgWeek(-1)">‹</button><span>${weekLabel(S.weekOffset)}</span><button onclick="chgWeek(1)">›</button></div><div class="day-tabs">${dayHtml}</div>`;
+    navHtml = `<div class="week-nav"><button aria-label="Vorige week" onclick="chgWeek(-1)">‹</button><span>${weekLabel(S.weekOffset)}</span><button aria-label="Volgende week" onclick="chgWeek(1)">›</button></div>`;
   }
 
   // Tab content
@@ -937,10 +982,10 @@ function render() {
   document.getElementById("app").innerHTML = `
     <div class="header"><div class="header-icon">🌿</div><div><h1>Eco Reest</h1><p>Aanwezigheid & Werkplekken</p></div></div>
     ${userHtml}
-    <div class="main-tabs">
-      <div class="main-tab${S.tab === "aanwezigheid" ? " active" : ""}" onclick="setTab('aanwezigheid')">📋 Aanwezigheid</div>
-      <div class="main-tab${S.tab === "werkplekken"  ? " active" : ""}" onclick="setTab('werkplekken')">🗺️ Werkplekken</div>
-      <div class="main-tab${S.tab === "admin"        ? " active" : ""}" onclick="setTab('admin')">⚙️</div>
+    <div class="main-tabs" role="tablist" aria-label="Navigatie">
+      <div class="main-tab${S.tab === "aanwezigheid" ? " active" : ""}" role="tab" tabindex="${S.tab === "aanwezigheid" ? "0" : "-1"}" aria-selected="${S.tab === "aanwezigheid"}" onclick="setTab('aanwezigheid')" onkeydown="if(event.key==='Enter'||event.key===' ')setTab('aanwezigheid')">📋 Aanwezigheid</div>
+      <div class="main-tab${S.tab === "werkplekken"  ? " active" : ""}" role="tab" tabindex="${S.tab === "werkplekken"  ? "0" : "-1"}" aria-selected="${S.tab === "werkplekken"}"  onclick="setTab('werkplekken')"  onkeydown="if(event.key==='Enter'||event.key===' ')setTab('werkplekken')">🗺️ Werkplekken</div>
+      <div class="main-tab${S.tab === "admin"        ? " active" : ""}" role="tab" tabindex="${S.tab === "admin"        ? "0" : "-1"}" aria-selected="${S.tab === "admin"}"        onclick="setTab('admin')"        onkeydown="if(event.key==='Enter'||event.key===' ')setTab('admin')" aria-label="Admin instellingen">⚙️</div>
     </div>
     ${navHtml}
     ${content}${renderModal()}
@@ -970,11 +1015,57 @@ window.setTab = t => {
 window.chgWeek = d => {
   S.weekOffset += d;
   S.selectedDayIdx = 0;
+  S.selectedDays = [fmtDate(weekDates(S.weekOffset)[0])];
   render();
 };
 
-window.selDay = i => {
-  S.selectedDayIdx = i;
+window.selWeekDay = (i, ev) => {
+  const wd2     = weekDates(S.weekOffset);
+  const weekDks = wd2.map(d => fmtDate(d));
+  const dk      = weekDks[i];
+
+  if (ev?.shiftKey && S.anchorDay) {
+    // Range select within this week
+    const aIdx = weekDks.indexOf(S.anchorDay);
+    if (aIdx >= 0) {
+      const [lo, hi] = aIdx <= i ? [aIdx, i] : [i, aIdx];
+      const inWeek   = new Set(weekDks);
+      const outside  = S.selectedDays.filter(d => !inWeek.has(d));
+      S.selectedDays = [...outside, ...weekDks.slice(lo, hi + 1)];
+    } else {
+      S.selectedDays = [dk];
+      S.anchorDay    = dk;
+    }
+    S.selectedDayIdx = i;
+  } else if (ev?.ctrlKey || ev?.metaKey) {
+    // Toggle
+    if (S.selectedDays.includes(dk)) {
+      S.selectedDays = S.selectedDays.filter(d => d !== dk);
+    } else {
+      S.selectedDays.push(dk);
+      S.anchorDay    = dk;
+    }
+    S.selectedDayIdx = i;
+  } else {
+    // Exclusive select (plain click / keyboard Enter)
+    S.selectedDays   = [dk];
+    S.selectedDayIdx = i;
+    S.anchorDay      = dk;
+  }
+  render();
+};
+
+window.selWeekAll = () => {
+  const wd2     = weekDates(S.weekOffset);
+  const weekDks = wd2.map(d => fmtDate(d));
+  if (weekDks.every(d => S.selectedDays.includes(d))) {
+    // All selected → deselect all (allow empty)
+    S.selectedDays = S.selectedDays.filter(d => !weekDks.includes(d));
+  } else {
+    weekDks.forEach(d => { if (!S.selectedDays.includes(d)) S.selectedDays.push(d); });
+    S.selectedDayIdx = 4;
+    S.anchorDay      = weekDks[0];
+  }
   render();
 };
 
@@ -993,35 +1084,26 @@ window.chgFloor = dir => {
   }
 };
 
-window.setMyStatus = (dk, status) => {
-  const cur = getAtt(dk, S.userName, S.period);
-  if (cur === status) {
-    setAtt(dk, S.userName, null, S.period);
+window.setMyStatus = status => {
+  if (!S.userName) return;
+  const selDks  = S.selectedDays.length > 0 ? S.selectedDays : [fmtDate(weekDates(S.weekOffset)[S.selectedDayIdx])];
+  const label   = getCfg().statuses.find(s => s.id === status)?.label || status;
+  const allHave = selDks.every(d => getAtt(d, S.userName, S.period) === status);
+
+  if (allHave) {
+    selDks.forEach(d => setAtt(d, S.userName, null, S.period));
     toast("Status gewist", "info");
-    render();
   } else {
-    setAtt(dk, S.userName, status, S.period);
-    if (OFFICE_STATUSES.includes(status)) {
-      if (DESK_LOCATIONS.includes(status)) {
-        const wd2 = weekDates(S.weekOffset);
-        const sel2 = wd2[S.selectedDayIdx];
-        const dy2  = dKey(sel2);
-        const fd   = hasFixedDesk(S.userName, dy2, status);
-        if (fd) {
-          toast(`${getCfg().statuses.find(s => s.id === status)?.label} — vaste plek ${fd} ✓`);
-        } else {
-          S.floor = status === "groningen" ? "grn" : "hgv1";
-          toast(`${getCfg().statuses.find(s => s.id === status)?.label} — kies je werkplek`);
-          S.tab = "werkplekken";
-        }
-      } else {
-        toast(`Status: ${getCfg().statuses.find(s => s.id === status)?.label} ✓`);
-      }
+    selDks.forEach(d => setAtt(d, S.userName, status, S.period));
+    if (DESK_LOCATIONS.includes(status)) {
+      const primarySel = new Date(selDks[selDks.length - 1] + 'T12:00:00');
+      const fd = hasFixedDesk(S.userName, dKey(primarySel), status);
+      toast(fd ? `${label} — vaste plek ${fd} ✓` : `${label} ✓`);
     } else {
-      toast(`Status: ${getCfg().statuses.find(s => s.id === status)?.label}`);
+      toast(`${label} ✓`);
     }
-    render();
   }
+  render();
 };
 
 window.saveNote = dk => {
@@ -1228,19 +1310,112 @@ window.chgMonth = d => {
   render();
 };
 
-window.selectDate = dk => {
-  const d      = new Date(dk);
-  const today  = new Date();
-  const todayMon = new Date(today);
-  todayMon.setDate(today.getDate() - ((today.getDay() + 6) % 7));
-  const selMon = new Date(d);
-  selMon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  const diff = Math.round((selMon - todayMon) / 86400000);
-  S.weekOffset      = Math.round(diff / 7);
-  S.selectedDayIdx  = d.getDay() - 1;
+window.toggleDate = (dk, ev) => {
+  if (ev?.shiftKey && S.anchorDay) {
+    // Range select within visible month
+    const allMon = monthDates(S.monthOffset).map(d => fmtDate(d));
+    const aIdx   = allMon.indexOf(S.anchorDay);
+    const bIdx   = allMon.indexOf(dk);
+    if (aIdx >= 0 && bIdx >= 0) {
+      const [lo, hi] = aIdx <= bIdx ? [aIdx, bIdx] : [bIdx, aIdx];
+      const range    = allMon.slice(lo, hi + 1);
+      range.forEach(d => { if (!S.selectedDays.includes(d)) S.selectedDays.push(d); });
+    } else {
+      if (!S.selectedDays.includes(dk)) S.selectedDays.push(dk);
+      S.anchorDay = dk;
+    }
+  } else if (ev?.ctrlKey || ev?.metaKey) {
+    // Toggle
+    if (S.selectedDays.includes(dk)) {
+      S.selectedDays = S.selectedDays.filter(d => d !== dk);
+    } else {
+      S.selectedDays.push(dk);
+      S.anchorDay = dk;
+    }
+  } else {
+    // Exclusive select
+    S.selectedDays = [dk];
+    S.anchorDay    = dk;
+  }
+  // Update selectedDayIdx if this date is in the current week
+  const wd2 = weekDates(S.weekOffset);
+  for (let i = 0; i < 5; i++) {
+    if (fmtDate(wd2[i]) === dk) { S.selectedDayIdx = i; break; }
+  }
   render();
-  setTimeout(() => document.querySelector('.att-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 };
+
+// ── Keyboard: week column header navigation ──
+window.weekDayThKey = (ev, i) => {
+  if (ev.key === ' ') {
+    ev.preventDefault();
+    // Space = toggle (additive, like Ctrl+click)
+    selWeekDay(i, { ctrlKey: true });
+    setTimeout(() => document.querySelector(`.week-day-th[data-col="${i}"]`)?.focus(), 0);
+  } else if (ev.key === 'Enter') {
+    ev.preventDefault();
+    // Enter = exclusive select
+    selWeekDay(i, {});
+    setTimeout(() => document.querySelector(`.week-day-th[data-col="${i}"]`)?.focus(), 0);
+  } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+    ev.preventDefault();
+    const next = ev.key === 'ArrowLeft' ? Math.max(0, i - 1) : Math.min(4, i + 1);
+    document.querySelector(`.week-day-th[data-col="${next}"]`)?.focus();
+  } else if (ev.key === 'Home') {
+    ev.preventDefault();
+    document.querySelector('.week-day-th[data-col="0"]')?.focus();
+  } else if (ev.key === 'End') {
+    ev.preventDefault();
+    document.querySelector('.week-day-th[data-col="4"]')?.focus();
+  } else if (ev.key === 'Shift' || ev.key === 'Control') {
+    // Modifier keys alone — no action
+  } else if (ev.shiftKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+    ev.preventDefault();
+    const next2 = ev.key === 'ArrowLeft' ? Math.max(0, i - 1) : Math.min(4, i + 1);
+    selWeekDay(next2, { shiftKey: true });
+    setTimeout(() => document.querySelector(`.week-day-th[data-col="${next2}"]`)?.focus(), 0);
+  }
+};
+
+// ── Global keyboard shortcuts ──
+document.addEventListener('keydown', ev => {
+  const tag = document.activeElement?.tagName;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) {
+    // Ctrl+A: select all days in current week view
+    if (ev.key === 'a' && S.tab === 'aanwezigheid' && S.viewMode === 'week') {
+      ev.preventDefault();
+      selWeekAll();
+    }
+    return;
+  }
+  // Esc: clear selection
+  if (ev.key === 'Escape') {
+    S.selectedDays = [];
+    render();
+    return;
+  }
+  // Number keys 1–5: exclusive day select (week view)
+  if ('12345'.includes(ev.key) && S.tab === 'aanwezigheid' && S.viewMode === 'week') {
+    const idx  = parseInt(ev.key) - 1;
+    const wd2  = weekDates(S.weekOffset);
+    const dk2  = fmtDate(wd2[idx]);
+    S.selectedDays   = [dk2];
+    S.selectedDayIdx = idx;
+    S.anchorDay      = dk2;
+    render();
+    setTimeout(() => document.querySelector(`.week-day-th[data-col="${idx}"]`)?.focus(), 0);
+    return;
+  }
+  // Status shortcuts — only when days are selected and user is set
+  if (S.selectedDays.length > 0 && S.userName) {
+    const statusKeys = { h:'hoogeveen', g:'groningen', t:'thuis', f:'veld', v:'vrij', z:'ziek' };
+    const status = statusKeys[ev.key.toLowerCase()];
+    if (status && getCfg().statuses.find(s => s.id === status)) {
+      setMyStatus(status);
+    }
+  }
+});
 
 // Start de app — laad data van de server
 if (S.selectedDayIdx < 0) S.selectedDayIdx = 0;
